@@ -184,14 +184,14 @@ export default function TabLayout() {
           ),
         }}
       />
-      
+
       <Tabs.Screen
-        name="agent"
+        name="blog"
         options={{
-          title: 'Agents',
+          title: 'Actualités',
           tabBarIcon: ({ focused, color }) => (
             <AnimatedTabIcon 
-              name={focused ? "people-sharp" : "people-outline"} 
+              name={focused ? "newspaper-sharp" : "newspaper-outline"} 
               focused={focused}
               color={color}
             />
@@ -200,27 +200,26 @@ export default function TabLayout() {
       />
       
       <Tabs.Screen
-        name="properties"
+        name="property"
         options={{
-          title: '',
-          tabBarIcon: ({ focused }) => (
+          title: 'Propriétés',
+          tabBarIcon: ({ focused, color }) => (
             <AnimatedTabIcon 
               name={focused ? "search-sharp" : "search-outline"} 
               focused={focused}
-              color="#fff"
-              isCenter={true}
+              color={color}
             />
           ),
         }}
       />
-
+      
       <Tabs.Screen
-        name="blog"
+        name="agent"
         options={{
-          title: 'Blog',
+          title: 'Agents',
           tabBarIcon: ({ focused, color }) => (
             <AnimatedTabIcon 
-              name={focused ? "newspaper-sharp" : "newspaper-outline"} 
+              name={focused ? "people-sharp" : "people-outline"} 
               focused={focused}
               color={color}
             />
@@ -255,7 +254,7 @@ const styles = StyleSheet.create({
   centerIconContainer: {
     width: 70,
     height: 70,
-    borderRadius: 35,
+    borderRadius: 25,
     backgroundColor: '#065483',
     alignItems: 'center',
     justifyContent: 'center',
@@ -270,9 +269,9 @@ const styles = StyleSheet.create({
   },
   centerGlow: {
     position: 'absolute',
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 73,
+    height: 73,
+    borderRadius: 28,
     backgroundColor: '#065483',
     top: -45,
     opacity: 0.3,

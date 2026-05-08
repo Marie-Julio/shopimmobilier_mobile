@@ -3,20 +3,13 @@ import { router, useLocalSearchParams } from 'expo-router';
 import * as Speech from 'expo-speech';
 import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Dimensions,
-  Image,
-  Linking,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+  ActivityIndicator, Alert, Dimensions, Image, Linking, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native';
-import { getResource, postResource } from '../../services/api';
+
+import { useWindowDimensions } from 'react-native';
+import RenderHTML from 'react-native-render-html';
+
+import { getResource, postResource } from '../../../services/api';
 
 const { width } = Dimensions.get('window');
 
@@ -102,6 +95,8 @@ interface Language {
 }
 
 export default function PropertyDetailScreen() {
+  const { width } = useWindowDimensions();
+
   const { id } = useLocalSearchParams<{ id: string }>();
   const [loading, setLoading] = useState(true);
   const [property, setProperty] = useState<Property | null>(null);
@@ -415,7 +410,7 @@ export default function PropertyDetailScreen() {
       {/* Image Gallery */}
       <View style={styles.galleryContainer}>
         <Image 
-          source={mainImage ? { uri: mainImage } : require('../../assets/images/default-property.jpg')} 
+          source={mainImage ? { uri: mainImage } : require('../../../assets/images/default-property.jpg')} 
           style={styles.mainImage} 
         />
         
@@ -519,7 +514,14 @@ export default function PropertyDetailScreen() {
         {/* Description */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Description</Text>
-          <Text style={styles.description}>{property.description}</Text>
+          <RenderHTML
+            contentWidth={width}
+            source={{ html: property.description }}
+            tagsStyles={{
+              p: { fontSize: 16, marginBottom: 8 },
+              h1: { fontSize: 24, fontWeight: 'bold' },
+            }}
+          />
         </View>
 
         {/* Caractéristiques */}
@@ -624,7 +626,7 @@ export default function PropertyDetailScreen() {
                 source={
                   property.agent.utilisateur?.photo_profil
                     ? { uri: `${process.env.EXPO_PUBLIC_STORAGE_URL}/storage/${property.agent.utilisateur.photo_profil}` }
-                    : require('../../assets/images/default-agent.jpg')
+                    : require('../../../assets/images/default-agent.jpg')
                 }
                 style={styles.agentImage}
               />

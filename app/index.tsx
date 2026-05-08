@@ -1,5 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import React, { useEffect, useRef } from 'react';
 import {
@@ -134,18 +132,12 @@ export default function SplashScreen() {
       
       {/* Image de fond avec parallax */}
       <Image
-        source={require('../assets/images/bg1.jpg')}
+        source={require('../assets/images/fond.jpg')}
         style={styles.backgroundImage}
       />
       
-      {/* Overlay avec dégradé dynamique */}
-      <LinearGradient
-        colors={['rgba(6,84,131,0.95)', 'rgba(236,145,7,0.85)']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.overlay}
-      />
-
+      {/* Overlay avec couleur unie (dégradé supprimé) */}
+      <View style={styles.overlay} />
 
       {/* Contenu principal */}
       <Animated.View
@@ -161,6 +153,8 @@ export default function SplashScreen() {
           source={require('../assets/images/react-logo.png')}
           style={styles.logo}
         />
+        {/* Sous-titre */}
+        <Text style={styles.subtagline2}>Shopimmobilier</Text>
         
         {/* Ligne décorative animée */}
         <View style={styles.decorativeContainer}>
@@ -189,21 +183,15 @@ export default function SplashScreen() {
         {/* Sous-titre */}
         <Text style={styles.subtagline}>Trouvez le bien de vos rêves</Text>
 
-        {/* Bouton avec animation */}
+        {/* Bouton sans LinearGradient */}
         <TouchableOpacity
           style={styles.button}
           onPress={() => router.replace('/(tabs)')}
           activeOpacity={0.8}
         >
-          <LinearGradient
-            colors={['#EC9107', '#f5a623']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.buttonGradient}
-          >
+          <View style={styles.buttonBackground}>
             <Text style={styles.buttonText}>Découvrir</Text>
-            <Ionicons name="arrow-forward" size={20} color="#fff" />
-          </LinearGradient>
+          </View>
         </TouchableOpacity>
 
         {/* Indicateur de chargement */}
@@ -232,6 +220,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: '100%',
     height: '100%',
+    backgroundColor: 'rgba(6,84,131,0.95)', // couleur unie à la place du dégradé
   },
   particle: {
     position: 'absolute',
@@ -244,33 +233,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
   },
-  logoWrapper: {
-    marginBottom: 30,
-  },
   logo: {
-    marginBottom: 250,
-  },
-  logoContainer: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 15,
-  },
-  appName: {
-    fontSize: 52,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 20,
-    letterSpacing: 4,
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 2, height: 2 },
-    textShadowRadius: 8,
   },
   decorativeContainer: {
     flexDirection: 'row',
@@ -299,6 +262,12 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 3,
   },
+  subtagline2: {
+    fontSize: 18,
+    color: 'rgba(255,255,255,0.8)',
+    paddingTop: 20,
+    marginBottom: 250,
+  },
   subtagline: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.8)',
@@ -315,13 +284,14 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 5,
   },
-  buttonGradient: {
+  buttonBackground: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 15,
     paddingHorizontal: 30,
     gap: 10,
+    backgroundColor: '#EC9107', // couleur unie orange
   },
   buttonText: {
     color: '#fff',
@@ -342,11 +312,5 @@ const styles = StyleSheet.create({
   loadingDotActive: {
     width: 20,
     backgroundColor: '#EC9107',
-  },
-  copyright: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.5)',
-    position: 'absolute',
-    bottom: 20,
   },
 });
