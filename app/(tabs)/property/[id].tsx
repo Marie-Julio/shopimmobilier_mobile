@@ -1,18 +1,58 @@
+import { useFormulaireClavier } from '@/hooks/useFormulaireClavier';
+import { getResource, postResource } from '@/services/api';
+import { estAnnonceDjamabizz, LIBELLE_AGENT_MASQUE } from '@/utils/djamabizz';
+import { getStatutIndisponible } from '@/utils/statutPropriete';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Speech from 'expo-speech';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Dimensions, Image, Linking, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Dimensions,
+  Image,
+  Linking,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
-
-import { useWindowDimensions } from 'react-native';
 import RenderHTML from 'react-native-render-html';
 
-import { getResource, postResource } from '../../../services/api';
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const { width } = Dimensions.get('window');
+// ─────────────────────────────────────────────────────────────────────────────
+// THEME — exact copy from PropertiesScreen
+// ─────────────────────────────────────────────────────────────────────────────
+const T = {
+  primary:   '#065483',
+  secondary: '#EC9107',
+  danger:    '#EF4444',
+  success:   '#22C55E',
+  bg:        '#f0f4f8',
+  card:      '#FFFFFF',
+  text:      '#0f172a',
+  sub:       '#1e293b',
+  muted:     '#94a3b8',
+  border:    '#e2e8f0',
+  accent:    '#e0edf8',
+};
 
+const OPERATION_COLOR: Record<string, string> = {
+  vente:                '#EF4444',
+  location:             '#065483',
+  location_saisonniere: '#F59E0B',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
 interface Property {
   id_propriete: number;
   titre: string;
@@ -36,14 +76,13 @@ interface Property {
     telephone_bureau?: string;
     whatsapp?: string;
     email?: string;
-    utilisateur?: {
-      nom?: string;
-      prenom?: string;
-      photo_profil?: string;
-    };
+    utilisateur?: { nom?: string; prenom?: string; photo_profil?: string; role?: string };
+    // Drapeau calculé renvoyé par l'API (App\Models\Agent::est_djamabizz).
+    est_djamabizz?: boolean;
+    type_agent?: string;
     titre?: string;
     note_moyenne?: number;
-    nombre_avis?: number;
+    avis_count?: number;
   };
   date_publication: string;
   date_collecte?: string;
@@ -76,1119 +115,949 @@ interface ContactForm {
   message: string;
 }
 
-interface Badge {
-  text: string;
-  color: string;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+const formatPrice = (price?: number, devise = 'GNF') => {
+  if (!price) return 'N/A';
+  return new Intl.NumberFormat('fr-FR').format(price) + ' ' + devise;
+};
 
-interface Amenities {
-  interior: string[];
-  exterior: string[];
-  services: string[];
-  securite: string[];
-}
+const getTypeLabel = (t: string) =>
+  ({ appartement: 'Appartement', maison: 'Maison', terrain: 'Terrain',
+     commerce: 'Commerce', bureau: 'Bureau', entrepot: 'Entrepôt' }[t] ?? t);
 
-interface Language {
-  code: string;
-  name: string;
-  flag: string;
-}
+const getOperationLabel = (op: string) =>
+  ({ vente: 'À vendre', location: 'À louer',
+     location_saisonniere: 'Location saisonnière' }[op] ?? op);
 
+const getEtatLabel = (e: string) =>
+  ({ neuf: 'Neuf', excellent: 'Excellent', bon: 'Bon état',
+     renovation: 'À rénover', a_renover: 'À rénover' }[e] ?? e);
+
+const relativeTime = (dateStr: string) => {
+  const d = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  if (d === 0) return "Aujourd'hui";
+  if (d === 1) return 'Hier';
+  if (d < 7)   return `il y a ${d}j`;
+  if (d < 30)  return `il y a ${Math.floor(d / 7)}sem`;
+  return `il y a ${Math.floor(d / 30)}mois`;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUB-COMPONENTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Section header — same as PropertiesScreen */
+const SectionHeader = ({ title, icon }: { title: string; icon?: keyof typeof Ionicons.glyphMap }) => (
+  <View style={ss.sectionHeader}>
+    <View style={ss.sectionBar} />
+    {icon && <Ionicons name={icon} size={16} color={T.secondary} style={{ marginRight: 6 }} />}
+    <Text style={ss.sectionTitle}>{title}</Text>
+  </View>
+);
+
+/** Amenity pill — same as PropertyCard's amenityPill */
+const AmenityPill = ({
+  icon,
+  label,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+}) => (
+  <View style={ss.amenityPill}>
+    <Ionicons name={icon} size={13} color={T.primary} />
+    <Text style={ss.amenityText}>{label}</Text>
+  </View>
+);
+
+/** Stat chip — mirrors PropertyCard stats row */
+const StatChip = ({
+  icon,
+  value,
+  label,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  value: string;
+  label: string;
+}) => (
+  <View style={ss.statChip}>
+    <View style={ss.statIconWrap}>
+      <Ionicons name={icon} size={18} color={T.primary} />
+    </View>
+    <Text style={ss.statValue}>{value}</Text>
+    <Text style={ss.statLabel}>{label}</Text>
+  </View>
+);
+
+/** Quality dots — same as PropertiesScreen */
+const QualityDots = ({ score }: { score: number }) => {
+  const level = score >= 80 ? 3 : score >= 60 ? 2 : score >= 40 ? 1 : 0;
+  return (
+    <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center' }}>
+      {[0, 1, 2].map(i => (
+        <View
+          key={i}
+          style={[ss.dot, { backgroundColor: i < level ? T.success : T.border }]}
+        />
+      ))}
+      <Text style={ss.dotLabel}>{score}%</Text>
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
 export default function PropertyDetailScreen() {
   const { width } = useWindowDimensions();
-
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [loading, setLoading] = useState(true);
-  const [property, setProperty] = useState<Property | null>(null);
-  const [mainImage, setMainImage] = useState<string>('');
-  const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const [showMoreDetails, setShowMoreDetails] = useState(false);
-  
-  // État pour le lecteur vocal
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState<string>('fr-FR');
-  
-  // Formulaire de contact
-  const [contactForm, setContactForm] = useState<ContactForm>({
-    nom: '',
-    email: '',
-    telephone: '',
-    message: ''
-  });
-  const [sending, setSending] = useState(false);
 
-  const languages: Language[] = [
-    { code: 'fr-FR', name: 'Français', flag: '🇫🇷' },
-    { code: 'en-US', name: 'English', flag: '🇺🇸' },
-    { code: 'es-ES', name: 'Español', flag: '🇪🇸' },
-    { code: 'de-DE', name: 'Deutsch', flag: '🇩🇪' },
-    { code: 'it-IT', name: 'Italiano', flag: '🇮🇹' },
-    { code: 'ar-SA', name: 'العربية', flag: '🇸🇦' },
+  const [loading, setLoading]                     = useState(true);
+  const [property, setProperty]                   = useState<Property | null>(null);
+  const [mainImage, setMainImage]                 = useState('');
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [showMoreDetails, setShowMoreDetails]     = useState(false);
+  const [isSpeaking, setIsSpeaking]               = useState(false);
+  const [selectedLanguage, setSelectedLanguage]   = useState('fr-FR');
+  const [sending, setSending]                     = useState(false);
+  const [contactForm, setContactForm]             = useState<ContactForm>(
+    { nom: '', email: '', telephone: '', message: '' }
+  );
+
+  // Confort de saisie : le champ visé remonte au-dessus du clavier,
+  // « Entrée » passe au champ suivant, et le dernier champ referme le clavier.
+  const clavier = useFormulaireClavier(['nom', 'email', 'telephone', 'message']);
+
+  /**
+   * Message WhatsApp pré-rempli : l'agent voit immédiatement de quelle
+   * annonce il s'agit, sans avoir à demander.
+   */
+  const messageWhatsApp = () => {
+    if (!property) return '';
+    const lieu = [property.adresse, property.quartier, property.ville]
+      .filter(Boolean)
+      .join(', ');
+    return [
+      'Bonjour,',
+      '',
+      'Je suis intéressé(e) par cette annonce vue sur Shopimmobilier :',
+      `« ${property.titre} »`,
+      `Référence : ${property.reference ?? property.id_propriete}`,
+      `Prix : ${formatPrice(property.prix, property.devise)}`,
+      // `null` = ligne à retirer. Une chaîne vide reste une ligne vide
+      // volontaire : filtrer sur Boolean les supprimait aussi et le message
+      // arrivait en un seul bloc compact.
+      lieu ? `Localisation : ${lieu}` : null,
+      `Lien : https://shopimmobilier.com/property/${property.id_propriete}`,
+      '',
+      "Pouvez-vous me donner plus d'informations ?",
+    ].filter((ligne) => ligne !== null).join('\n');
+  };
+
+  const fadeAnim  = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(30)).current;
+
+  const languages = [
+    { code: 'fr-FR', flag: '🇫🇷', name: 'Français' },
+    { code: 'en-US', flag: '🇺🇸', name: 'English'  },
+    { code: 'ar-SA', flag: '🇸🇦', name: 'العربية'  },
   ];
 
   useEffect(() => {
     fetchProperty();
-    return () => {
-      if (isSpeaking) {
-        Speech.stop();
-      }
-    };
+    return () => { if (isSpeaking) Speech.stop(); };
   }, [id]);
 
   const fetchProperty = async () => {
     try {
       setLoading(true);
-      const response = await getResource(`/proprietes-public/${id}`);
-      
-      if (response?.data) {
-        setProperty(response.data);
-        
-        if (response.data.images?.length > 0) {
-          setMainImage(getImageUrl(response.data.images[0]));
-        }
-        
-        // Incrémenter les vues
+      const res = await getResource(`/proprietes-public/${id}`);
+      if (res?.data) {
+        setProperty(res.data);
+        if (res.data.images?.length > 0)
+          setMainImage(getImageUrl(res.data.images[0]));
         await postResource(`/proprietes/${id}/increment-view`, {});
+
+        Animated.parallel([
+          Animated.timing(fadeAnim,  { toValue: 1, duration: 400, useNativeDriver: true }),
+          Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
+        ]).start();
       }
-    } catch (error) {
-      console.error('Erreur chargement propriété:', error);
-      Alert.alert('Erreur', 'Impossible de charger les détails de la propriété');
+    } catch {
+      Alert.alert('Erreur', 'Impossible de charger la propriété');
       router.back();
     } finally {
       setLoading(false);
     }
   };
 
-  const getImageUrl = (image: { url: string }): string => {
-    return `${process.env.EXPO_PUBLIC_STORAGE_URL}/storage/${image.url}`;
+  const getImageUrl = (img: { url: string }) =>
+    `${process.env.EXPO_PUBLIC_STORAGE_URL}/storage/${img.url}`;
+
+  const handlePrevImage = () => {
+    if (!property?.images) return;
+    const i = (currentImageIndex - 1 + property.images.length) % property.images.length;
+    setMainImage(getImageUrl(property.images[i]));
+    setCurrentImageIndex(i);
   };
 
-  const formatPrice = (price?: number, devise: string = 'GNF'): string => {
-    if (!price) return 'N/A';
-    if (devise === 'GNF') {
-      return new Intl.NumberFormat('fr-FR').format(price) + ' GNF';
-    }
-    return new Intl.NumberFormat('fr-FR').format(price) + ' ' + devise;
+  const handleNextImage = () => {
+    if (!property?.images) return;
+    const i = (currentImageIndex + 1) % property.images.length;
+    setMainImage(getImageUrl(property.images[i]));
+    setCurrentImageIndex(i);
   };
 
-  const getPropertyTypeLabel = (type: string): string => {
-    const typeMap: Record<string, string> = {
-      'appartement': 'Appartement',
-      'maison': 'Maison',
-      'terrain': 'Terrain',
-      'commerce': 'Commerce',
-      'bureau': 'Bureau',
-      'entrepot': 'Entrepôt',
-    };
-    return typeMap[type] || type;
-  };
-
-  const getOperationLabel = (operation: string): string => {
-    const operationMap: Record<string, string> = {
-      'vente': 'À vendre',
-      'location': 'À louer',
-      'location_saisonniere': 'Location saisonnière',
-    };
-    return operationMap[operation] || operation;
-  };
-
-  const getEtatLabel = (etat: string): string => {
-    const etatMap: Record<string, string> = {
-      'neuf': 'Neuf',
-      'excellent': 'Excellent',
-      'bon': 'Bon',
-      'renovation': 'À rénover',
-    };
-    return etatMap[etat] || etat;
-  };
-
-  const getBadges = (): Badge[] => {
-    if (!property) return [];
-    
-    const badges: Badge[] = [];
-    
-    if (property.featured) {
-      badges.push({ text: 'En Vedette', color: '#FFD700' });
-    }
-    
-    if (property.statut === 'nouveau') {
-      badges.push({ text: 'Nouveau', color: '#4CAF50' });
-    }
-    
-    badges.push({ 
-      text: getOperationLabel(property.operation), 
-      color: property.operation === 'vente' ? '#FF3B30' : '#007AFF' 
+  const handleShare = async () => {
+    await Share.share({
+      message: `${property?.titre}\n${formatPrice(property?.prix, property?.devise)}\n\nSur Shopimmobilier https://shopimmobilier.com/property/${property?.id_propriete}`,
     });
-    
-    return badges;
   };
 
-  const getAmenities = (): Amenities => {
-    if (!property) return { interior: [], exterior: [], services: [], securite: [] };
-    
-    const amenities: Amenities = {
-      interior: [],
-      exterior: [],
-      services: [],
-      securite: []
-    };
-    
-    if (property.chambres > 0) {
-      amenities.interior.push(`${property.chambres} chambre(s)`);
-    }
-    
-    if (property.salles_de_bain > 0) {
-      amenities.interior.push(`${property.salles_de_bain} salle(s) de bain`);
-    }
-    
-    if (property.meuble) amenities.interior.push('Meublé');
-    if (property.climatisation) amenities.interior.push('Climatisation');
-    if (property.parking) amenities.exterior.push('Parking');
-    if (property.jardin) amenities.exterior.push('Jardin');
-    if (property.piscine) amenities.exterior.push('Piscine');
-    if (property.ascenseur) amenities.exterior.push('Ascenseur');
-    if (property.forage) amenities.services.push('Forage');
-    if (property.groupe_electrogene) amenities.services.push('Groupe électrogène');
-    if (property.electricite) amenities.services.push(`Électricité: ${property.electricite}`);
-    if (property.quartier_bruit) amenities.services.push(`Quartier: ${property.quartier_bruit}`);
-    if (property.niveau_securite) amenities.securite.push(`Sécurité: ${property.niveau_securite}`);
-    
-    return amenities;
-  };
-
-  const readPropertyInfo = async (): Promise<void> => {
+  const readPropertyInfo = (): void => {
     if (isSpeaking) {
-      await Speech.stop();
+      Speech.stop();
       setIsSpeaking(false);
       return;
     }
 
     if (!property) return;
 
-    const text = generateSpeechText(selectedLanguage);
-    
-    try {
-      await Speech.speak(text, {
-        language: selectedLanguage,
-        pitch: 1,
-        rate: 0.9,
-        onStart: () => setIsSpeaking(true),
-        onDone: () => setIsSpeaking(false),
-        onError: () => {
-          setIsSpeaking(false);
-          Alert.alert('Erreur', 'Impossible de lire le texte');
-        },
-      });
-    } catch (error) {
-      console.error('Erreur lecture:', error);
-      setIsSpeaking(false);
-    }
-  };
-
-  const generateSpeechText = (lang: string): string => {
-    if (!property) return '';
-    
-    const baseText = `${property.titre}. ${getPropertyTypeLabel(property.type)} ${getOperationLabel(property.operation)}. ` +
+    const text =
+      `${property.titre}. ` +
+      `${getTypeLabel(property.type)}, ${getOperationLabel(property.operation)}. ` +
       `Prix: ${formatPrice(property.prix, property.devise)}. ` +
-      `Surface: ${property.surface || 'non spécifiée'} mètres carrés. ` +
-      (property.chambres ? `${property.chambres} chambre(s). ` : '') +
-      (property.salles_de_bain ? `${property.salles_de_bain} salle(s) de bain. ` : '') +
-      `Localisation: ${property.adresse}, ${property.ville}. ` +
-      (property.description ? `Description: ${property.description}. ` : '');
-    
-    return baseText;
+      `Surface: ${property.surface || 'non précisée'} mètres carrés. ` +
+      (property.chambres     ? `${property.chambres} chambre${property.chambres > 1 ? 's' : ''}. ` : '') +
+      (property.salles_de_bain ? `${property.salles_de_bain} salle${property.salles_de_bain > 1 ? 's' : ''} de bain. ` : '') +
+      `Localisation: ${property.ville}${property.quartier ? ', ' + property.quartier : ''}. `;
+
+    Speech.stop();
+
+    Speech.speak(text, {
+      language: selectedLanguage,
+      pitch: 1.0,
+      rate: 0.85,
+      onStart: () => setIsSpeaking(true),
+      onDone:  () => setIsSpeaking(false),
+      onStopped: () => setIsSpeaking(false),
+      onError: () => setIsSpeaking(false),
+    });
   };
 
-  const handleThumbnailPress = (image: { url: string }, index: number): void => {
-    setMainImage(getImageUrl(image));
-    setCurrentImageIndex(index);
-  };
-
-  const handlePrevImage = (): void => {
-    if (!property?.images) return;
-    const newIndex = (currentImageIndex - 1 + property.images.length) % property.images.length;
-    setMainImage(getImageUrl(property.images[newIndex]));
-    setCurrentImageIndex(newIndex);
-  };
-
-  const handleNextImage = (): void => {
-    if (!property?.images) return;
-    const newIndex = (currentImageIndex + 1) % property.images.length;
-    setMainImage(getImageUrl(property.images[newIndex]));
-    setCurrentImageIndex(newIndex);
-  };
-
-  const handleShare = async (): Promise<void> => {
-    try {
-      await Share.share({
-        message: `${property?.titre}\n${formatPrice(property?.prix, property?.devise)}\n\nDécouvrez cette propriété sur ShopImmo`,
-        url: `https://shopimmo.com/property/${id}`,
-      });
-    } catch (error) {
-      console.error('Erreur partage:', error);
-    }
-  };
-
-  const handleCallAgent = (): void => {
-    if (property?.agent?.telephone_bureau) {
-      Linking.openURL(`tel:${property.agent.telephone_bureau}`);
-      postResource(`/proprietes/${id}/increment-call`, {});
-    }
-  };
-
-  const handleWhatsAppAgent = (): void => {
-    if (property?.agent?.whatsapp) {
-      Linking.openURL(`https://wa.me/${property.agent.whatsapp.replace(/\D/g, '')}`);
-      postResource(`/proprietes/${id}/increment-whatsapp`, {});
-    }
-  };
-
-  const handleEmailAgent = (): void => {
-    if (property?.agent?.email) {
-      Linking.openURL(`mailto:${property.agent.email}`);
-    }
-  };
-
-  const handleScheduleVisit = async (): Promise<void> => {
-    if (!contactForm.nom || !contactForm.email || !contactForm.message) {
-      Alert.alert('Erreur', 'Veuillez remplir tous les champs obligatoires');
-      return;
-    }
-
+  const handleScheduleVisit = async () => {
+    if (!contactForm.nom || !contactForm.email || !contactForm.message)
+      return Alert.alert('Erreur', 'Veuillez remplir les champs obligatoires');
     try {
       setSending(true);
-      
-      const formData = {
-        ...contactForm,
-        sujet: `Visite de ${property?.titre}`,
-        id_propriete: id,
-        type: 'visite'
-      };
-
-      const response = await postResource('/contacts', formData);
-      
-      if (response.status === 201) {
-        Alert.alert('Succès', 'Votre demande de visite a été envoyée');
+      const res = await postResource('/contacts', {
+        ...contactForm, sujet: `Visite de ${property?.titre}`,
+        id_propriete: id, type: 'visite',
+      });
+      if (res.status === 201) {
+        Alert.alert('Succès', 'Votre demande a été envoyée');
         setContactForm({ nom: '', email: '', telephone: '', message: '' });
       }
-    } catch (error) {
-      Alert.alert('Erreur', "Impossible d'envoyer la demande");
-    } finally {
-      setSending(false);
-    }
+    } catch { Alert.alert('Erreur', "Impossible d'envoyer"); }
+    finally { setSending(false); }
   };
 
-  const handleContactFormChange = (field: keyof ContactForm, value: string): void => {
-    setContactForm(prev => ({ ...prev, [field]: value }));
-  };
-
+  // ── Loading ────────────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
+      <View style={ss.loaderScreen}>
+        <ActivityIndicator size="large" color={T.primary} />
+        <Text style={ss.loaderText}>Chargement…</Text>
       </View>
     );
   }
 
-  if (!property) {
-    return (
-      <View style={styles.errorContainer}>
-        <Ionicons name="home-outline" size={80} color="#ccc" />
-        <Text style={styles.errorTitle}>Propriété non trouvée</Text>
-        <TouchableOpacity style={styles.errorButton} onPress={() => router.back()}>
-          <Text style={styles.errorButtonText}>Retour</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
+  if (!property) return null;
 
-  const amenities = getAmenities();
-  const badges = getBadges();
+  const statutIndispo = getStatutIndisponible(property.statut);
+  const opColor = statutIndispo?.color ?? OPERATION_COLOR[property.operation] ?? T.primary;
 
+  // ── Annonce publiée par un compte DjamaBizz ────────────────────────────
+  // L'identité et les coordonnées personnelles du jeune mandataire ne sont
+  // jamais exposées : le bloc « Agent » est remplacé par un bloc neutre au
+  // nom de l'agence, et la mise en relation passe obligatoirement par le
+  // formulaire « Demander une visite » situé juste en dessous.
+  const agentMasque = estAnnonceDjamabizz(property);
+
+  // Amenities
+  const interiorAmenities: Array<{ icon: keyof typeof Ionicons.glyphMap; label: string }> = [];
+  const exteriorAmenities: Array<{ icon: keyof typeof Ionicons.glyphMap; label: string }> = [];
+  const serviceAmenities:  Array<{ icon: keyof typeof Ionicons.glyphMap; label: string }> = [];
+
+  if (property.meuble)           interiorAmenities.push({ icon: 'bed-outline',             label: 'Meublé'             });
+  if (property.climatisation)    interiorAmenities.push({ icon: 'snow-outline',             label: 'Climatisation'      });
+  if (property.parking)          exteriorAmenities.push({ icon: 'car-outline',              label: 'Parking'            });
+  if (property.jardin)           exteriorAmenities.push({ icon: 'leaf-outline',             label: 'Jardin'             });
+  if (property.piscine)          exteriorAmenities.push({ icon: 'water-outline',            label: 'Piscine'            });
+  if (property.ascenseur)        exteriorAmenities.push({ icon: 'arrow-up-outline',         label: 'Ascenseur'          });
+  if (property.forage)           serviceAmenities.push({ icon: 'construct-outline',         label: 'Forage'             });
+  if (property.groupe_electrogene) serviceAmenities.push({ icon: 'flash-outline',           label: 'Groupe électrogène' });
+  if (property.electricite)      serviceAmenities.push({ icon: 'bulb-outline',              label: property.electricite });
+  if (property.niveau_securite)  serviceAmenities.push({ icon: 'shield-checkmark-outline',  label: `Sécurité: ${property.niveau_securite}` });
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Image Gallery */}
-      <View style={styles.galleryContainer}>
-        <Image 
-          source={mainImage ? { uri: mainImage } : require('../../../assets/images/default-property.jpg')} 
-          style={styles.mainImage} 
-        />
-        
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
+    <View style={ss.root}>
+      <ScrollView
+        {...clavier.propsScrollView}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={ss.scroll}
+      >
 
-        <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
-          <Ionicons name="share-outline" size={24} color="#fff" />
-        </TouchableOpacity>
+        {/* ── HERO IMAGE ── */}
+        <View style={ss.galleryWrap}>
+          <Image
+            source={
+              mainImage
+                ? { uri: mainImage }
+                : require('../../../assets/images/default-property.jpg')
+            }
+            style={ss.heroImg}
+          />
 
-        {property.images && property.images.length > 1 && (
-          <>
-            <TouchableOpacity style={[styles.navButton, styles.prevButton]} onPress={handlePrevImage}>
-              <Ionicons name="chevron-back" size={24} color="#fff" />
+          {/* Gradient overlay */}
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.72)']}
+            style={ss.heroGradient}
+          />
+
+          {/* Top controls */}
+          <View style={ss.heroTopRow}>
+            <TouchableOpacity style={ss.heroIconBtn} onPress={() => router.back()}>
+              <Ionicons name="arrow-back" size={20} color="#fff" />
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.navButton, styles.nextButton]} onPress={handleNextImage}>
-              <Ionicons name="chevron-forward" size={24} color="#fff" />
+            <TouchableOpacity style={ss.heroIconBtn} onPress={handleShare}>
+              <Ionicons name="share-outline" size={20} color="#fff" />
             </TouchableOpacity>
-          </>
-        )}
+          </View>
 
-        {/* Badges */}
-        <View style={styles.badgesContainer}>
-          {badges.map((badge, index) => (
-            <View key={index} style={[styles.badge, { backgroundColor: badge.color }]}>
-              <Text style={styles.badgeText}>{badge.text}</Text>
-            </View>
-          ))}
-        </View>
+          {/* Prev / Next */}
+          {property.images?.length > 1 && (
+            <>
+              <TouchableOpacity style={[ss.navBtn, ss.navBtnLeft]}  onPress={handlePrevImage}>
+                <Ionicons name="chevron-back"    size={20} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity style={[ss.navBtn, ss.navBtnRight]} onPress={handleNextImage}>
+                <Ionicons name="chevron-forward" size={20} color="#fff" />
+              </TouchableOpacity>
+            </>
+          )}
 
-        {/* Image Counter */}
-        {property.images && property.images.length > 1 && (
-          <View style={styles.imageCounter}>
-            <Text style={styles.imageCounterText}>
-              {currentImageIndex + 1} / {property.images.length}
+          {/* Bottom-left: operation badge */}
+          <View style={[ss.opBadge, { backgroundColor: opColor }]}>
+            <Text style={ss.opBadgeText}>
+              {statutIndispo
+                ? `${getOperationLabel(property.operation)} · ${statutIndispo.label}`
+                : getOperationLabel(property.operation)}
             </Text>
           </View>
+
+          {/* Bottom-right: counter */}
+          {property.images?.length > 1 && (
+            <View style={ss.imgCounter}>
+              <Text style={ss.imgCounterText}>
+                {currentImageIndex + 1}/{property.images.length}
+              </Text>
+            </View>
+          )}
+
+          {/* Featured star */}
+          {property.featured && (
+            <View style={ss.featuredBadge}>
+              <Ionicons name="star" size={11} color="#fff" />
+              <Text style={ss.featuredText}>En vedette</Text>
+            </View>
+          )}
+        </View>
+
+        {/* ── THUMBNAILS ── */}
+        {property.images?.length > 1 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={ss.thumbRow}
+          >
+            {property.images.map((img, i) => (
+              <TouchableOpacity
+                key={i}
+                onPress={() => { setMainImage(getImageUrl(img)); setCurrentImageIndex(i); }}
+                style={[ss.thumb, i === currentImageIndex && ss.thumbActive]}
+              >
+                <Image source={{ uri: getImageUrl(img) }} style={ss.thumbImg} />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         )}
-      </View>
 
-      {/* Thumbnails */}
-      {property.images && property.images.length > 1 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbnailsContainer}>
-          {property.images.map((image, index) => (
-            <TouchableOpacity
-              key={index}
-              onPress={() => handleThumbnailPress(image, index)}
-              style={[
-                styles.thumbnail,
-                index === currentImageIndex && styles.thumbnailActive,
-              ]}
-            >
-              <Image source={{ uri: getImageUrl(image) }} style={styles.thumbnailImage} />
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
+        {/* ── CARD: PRICE + TITLE ── */}
+        <Animated.View style={[ss.infoCard, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+          {/* Price */}
+          <Text style={ss.price}>{formatPrice(property.prix, property.devise)}</Text>
+          <Text style={ss.title}>{property.titre}</Text>
 
-      {/* Property Info */}
-      <View style={styles.infoContainer}>
-        <Text style={styles.price}>{formatPrice(property.prix, property.devise)}</Text>
-        <Text style={styles.title}>{property.titre}</Text>
-        
-        <View style={styles.locationContainer}>
-          <Ionicons name="location-outline" size={18} color="#666" />
-          <Text style={styles.location}>
-            {property.adresse}, {property.ville}
-            {property.quartier && `, ${property.quartier}`}
-          </Text>
+          {/* Location */}
+          <View style={ss.locationRow}>
+            <Ionicons name="location-sharp" size={14} color={T.secondary} />
+            <Text style={ss.locationText}>
+              {property.adresse}, {property.ville}
+              {property.quartier ? ` · ${property.quartier}` : ''}
+            </Text>
+          </View>
+
+          {/* Date + views */}
+          <View style={ss.metaRow}>
+            <View style={ss.metaPill}>
+              <Ionicons name="time-outline" size={12} color={T.muted} />
+              <Text style={ss.metaText}>{relativeTime(property.date_publication)}</Text>
+            </View>
+            {property.views !== undefined && (
+              <View style={ss.metaPill}>
+                <Ionicons name="eye-outline" size={12} color={T.muted} />
+                <Text style={ss.metaText}>{property.views} vues</Text>
+              </View>
+            )}
+            {property.etat && (
+              <View style={[ss.metaPill, { backgroundColor: T.accent, borderColor: T.primary + '30' }]}>
+                <Text style={[ss.metaText, { color: T.primary, fontWeight: '700' }]}>
+                  {getEtatLabel(property.etat)}
+                </Text>
+              </View>
+            )}
+          </View>
+        </Animated.View>
+
+        {/* ── CARD: STATS ── */}
+        {/* Cette carte s'affichait VIDE quand le bien n'a ni surface, ni
+            chambres, ni salles de bain, ni année, ni score qualité
+            (cas fréquent des terrains). On ne l'affiche plus dans ce cas. */}
+        {(property.surface > 0 ||
+          property.chambres > 0 ||
+          property.salles_de_bain > 0 ||
+          !!property.annee_construction ||
+          property.qualite_score !== undefined) && (
+        <View style={ss.card}>
+          <View style={ss.statsRow}>
+            {property.surface > 0 && (
+              <StatChip icon="resize"        value={`${property.surface}`} label="m²"      />
+            )}
+            {property.chambres > 0 && (
+              <StatChip icon="bed"           value={`${property.chambres}`} label="ch."    />
+            )}
+            {property.salles_de_bain > 0 && (
+              <StatChip icon="water"         value={`${property.salles_de_bain}`} label="sdb" />
+            )}
+            {property.annee_construction && (
+              <StatChip icon="calendar"      value={`${property.annee_construction}`} label="année" />
+            )}
+          </View>
+
+          {/* Quality score */}
+          {property.qualite_score !== undefined && (
+            <View style={ss.qualityRow}>
+              <Text style={ss.qualityLabel}>Qualité</Text>
+              <QualityDots score={property.qualite_score} />
+            </View>
+          )}
         </View>
+        )}
 
-        {/* Quick Stats */}
-        <View style={styles.statsGrid}>
-          {property.surface > 0 && (
-            <View style={styles.statItem}>
-              <Ionicons name="resize-outline" size={20} color="#007AFF" />
-              <Text style={styles.statValue}>{property.surface} m²</Text>
-            </View>
-          )}
-          {property.chambres > 0 && (
-            <View style={styles.statItem}>
-              <Ionicons name="bed-outline" size={20} color="#007AFF" />
-              <Text style={styles.statValue}>{property.chambres} ch</Text>
-            </View>
-          )}
-          {property.salles_de_bain > 0 && (
-            <View style={styles.statItem}>
-              <Ionicons name="water-outline" size={20} color="#007AFF" />
-              <Text style={styles.statValue}>{property.salles_de_bain} sdb</Text>
-            </View>
-          )}
-          {property.annee_construction && (
-            <View style={styles.statItem}>
-              <Ionicons name="calendar-outline" size={20} color="#007AFF" />
-              <Text style={styles.statValue}>{property.annee_construction}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Description */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Description</Text>
+        {/* ── CARD: DESCRIPTION ── */}
+        <View style={ss.card}>
+          <SectionHeader title="Description" />
           <RenderHTML
-            contentWidth={width}
+            contentWidth={width - 64}
             source={{ html: property.description }}
             tagsStyles={{
-              p: { fontSize: 16, marginBottom: 8 },
-              h1: { fontSize: 24, fontWeight: 'bold' },
+              p:  { fontSize: 14, color: T.sub, lineHeight: 22, marginBottom: 6 },
+              h1: { fontSize: 18, fontWeight: '700', color: T.text },
+              h2: { fontSize: 16, fontWeight: '700', color: T.text },
             }}
           />
         </View>
 
-        {/* Caractéristiques */}
-        {amenities.interior.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Caractéristiques</Text>
-            <View style={styles.amenitiesGrid}>
-              {amenities.interior.map((item, index) => (
-                <View key={index} style={styles.amenityItem}>
-                  <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
-                  <Text style={styles.amenityText}>{item}</Text>
+        {/* ── CARD: ÉQUIPEMENTS ── */}
+        {(interiorAmenities.length + exteriorAmenities.length + serviceAmenities.length) > 0 && (
+          <View style={ss.card}>
+            <SectionHeader title="Équipements" />
+
+            {interiorAmenities.length > 0 && (
+              <>
+                <Text style={ss.amenityGroupLabel}>Intérieur</Text>
+                <View style={ss.amenityGrid}>
+                  {interiorAmenities.map((a, i) => <AmenityPill key={i} {...a} />)}
                 </View>
-              ))}
-            </View>
+              </>
+            )}
+            {exteriorAmenities.length > 0 && (
+              <>
+                <Text style={[ss.amenityGroupLabel, { marginTop: 12 }]}>Extérieur</Text>
+                <View style={ss.amenityGrid}>
+                  {exteriorAmenities.map((a, i) => <AmenityPill key={i} {...a} />)}
+                </View>
+              </>
+            )}
+            {serviceAmenities.length > 0 && (
+              <>
+                <Text style={[ss.amenityGroupLabel, { marginTop: 12 }]}>Services</Text>
+                <View style={ss.amenityGrid}>
+                  {serviceAmenities.map((a, i) => <AmenityPill key={i} {...a} />)}
+                </View>
+              </>
+            )}
           </View>
         )}
 
-        {/* Équipements */}
-        {amenities.exterior.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Équipements</Text>
-            <View style={styles.amenitiesGrid}>
-              {amenities.exterior.map((item, index) => (
-                <View key={index} style={styles.amenityItem}>
-                  <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
-                  <Text style={styles.amenityText}>{item}</Text>
-                </View>
-              ))}
-            </View>
+        {/* ── CARD: LECTEUR VOCAL ── */}
+        <View style={ss.card}>
+          <SectionHeader title="Écouter la description" icon="volume-high-outline" />
+          <View style={ss.langRow}>
+            {languages.map(l => (
+              <TouchableOpacity
+                key={l.code}
+                style={[ss.langBtn, selectedLanguage === l.code && ss.langBtnOn]}
+                onPress={() => setSelectedLanguage(l.code)}
+              >
+                <Text style={ss.langFlag}>{l.flag}</Text>
+                <Text style={[ss.langName, selectedLanguage === l.code && ss.langNameOn]}>
+                  {l.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
           </View>
-        )}
-
-        {/* Services */}
-        {amenities.services.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Services</Text>
-            <View style={styles.amenitiesGrid}>
-              {amenities.services.map((item, index) => (
-                <View key={index} style={styles.amenityItem}>
-                  <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
-                  <Text style={styles.amenityText}>{item}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Sécurité */}
-        {amenities.securite.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Sécurité</Text>
-            <View style={styles.amenitiesGrid}>
-              {amenities.securite.map((item, index) => (
-                <View key={index} style={styles.amenityItem}>
-                  <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
-                  <Text style={styles.amenityText}>{item}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Lecteur vocal */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Écouter la description</Text>
-          <View style={styles.speechContainer}>
-            <View style={styles.languageSelector}>
-              {languages.map((lang) => (
-                <TouchableOpacity
-                  key={lang.code}
-                  style={[
-                    styles.languageOption,
-                    selectedLanguage === lang.code && styles.languageOptionActive,
-                  ]}
-                  onPress={() => setSelectedLanguage(lang.code)}
-                >
-                  <Text style={styles.languageFlag}>{lang.flag}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TouchableOpacity
-              style={[styles.speechButton, isSpeaking && styles.speechButtonActive]}
-              onPress={readPropertyInfo}
+          <TouchableOpacity
+            style={[ss.speechBtn, isSpeaking && ss.speechBtnActive]}
+            onPress={readPropertyInfo}
+            activeOpacity={0.85}
+          >
+            <LinearGradient
+              colors={isSpeaking ? [T.danger, '#FF8080'] : [T.primary, '#0a80c4']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              style={ss.speechGradient}
             >
               <Ionicons
                 name={isSpeaking ? 'stop-circle' : 'play-circle'}
-                size={50}
-                color={isSpeaking ? '#FF3B30' : '#007AFF'}
+                size={22}
+                color="#fff"
               />
-              <Text style={styles.speechButtonText}>
+              <Text style={ss.speechBtnText}>
                 {isSpeaking ? 'Arrêter' : `Lire en ${languages.find(l => l.code === selectedLanguage)?.name}`}
               </Text>
-            </TouchableOpacity>
-          </View>
+            </LinearGradient>
+          </TouchableOpacity>
         </View>
 
-        {/* Agent Info */}
-        {property.agent && (
-          <View style={styles.agentSection}>
-            <View style={styles.agentHeader}>
+        {/* ── CARD: PUBLIÉ PAR L'AGENCE (annonce DjamaBizz) ── */}
+        {property.agent && agentMasque && (
+          <View style={ss.card}>
+            <SectionHeader title="Publié par" />
+
+            <View style={ss.agentHeader}>
+              <Image
+                source={require('../../../assets/images/default-agent.jpg')}
+                style={ss.agentAvatar}
+              />
+              <View style={{ flex: 1, marginTop: -20 }}>
+                <Text style={ss.agentName}>{LIBELLE_AGENT_MASQUE}</Text>
+                <Text style={ss.agentTitle}>Annonce gérée par l'agence</Text>
+              </View>
+            </View>
+
+            <View style={ss.masqueNotice}>
+              <Ionicons name="shield-checkmark-outline" size={16} color={T.primary} />
+              <Text style={ss.masqueNoticeText}>
+                Pour visiter ce bien ou obtenir plus d'informations, utilisez le
+                formulaire ci-dessous : un conseiller vous recontacte.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* ── CARD: AGENT ── */}
+        {property.agent && !agentMasque && (
+          <View style={ss.card}>
+            <SectionHeader title="Agent" />
+
+            <View style={ss.agentHeader}>
               <Image
                 source={
                   property.agent.utilisateur?.photo_profil
                     ? { uri: `${process.env.EXPO_PUBLIC_STORAGE_URL}/storage/${property.agent.utilisateur.photo_profil}` }
                     : require('../../../assets/images/default-agent.jpg')
                 }
-                style={styles.agentImage}
+                style={ss.agentAvatar}
               />
-              <View style={styles.agentInfo}>
-                <Text style={styles.agentName}>
+              <View style={{ flex: 1, marginTop: -20, }}>
+                <Text style={ss.agentName}>
                   {property.agent.utilisateur?.prenom} {property.agent.utilisateur?.nom}
                 </Text>
-                <Text style={styles.agentTitle}>{property.agent.titre || 'Agent Immobilier'}</Text>
-                {property.agent.note_moyenne && (
-                  <View style={styles.agentRating}>
-                    {[1, 2, 3, 4, 5].map((star) => (
+                <Text style={ss.agentTitle}>{property.agent.titre ?? 'Agent Immobilier'}</Text>
+                {property.agent.note_moyenne !== undefined && (
+                  <View style={ss.ratingRow}>
+                    {[1, 2, 3, 4, 5].map(s => (
                       <Ionicons
-                        key={star}
-                        name={star <= (property.agent?.note_moyenne || 0) ? 'star' : 'star-outline'}
-                        size={14}
-                        color="#FFD700"
+                        key={s}
+                        name={s <= (property.agent?.note_moyenne ?? 0) ? 'star' : 'star-outline'}
+                        size={13}
+                        color={T.secondary}
                       />
                     ))}
-                    <Text style={styles.ratingText}>({property.agent.nombre_avis || 0} avis)</Text>
                   </View>
                 )}
               </View>
             </View>
 
-            <View style={styles.agentActions}>
+            {/* Agent action buttons */}
+            <View style={ss.agentActions}>
               {property.agent.telephone_bureau && (
-                <TouchableOpacity style={[styles.agentButton, styles.callButton]} onPress={handleCallAgent}>
-                  <Ionicons name="call" size={20} color="#fff" />
-                  <Text style={styles.agentButtonText}>Appeler</Text>
+                <TouchableOpacity
+                  style={[ss.agentBtn, { backgroundColor: T.primary }]}
+                  onPress={() => {
+                    Linking.openURL(`tel:${property.agent!.telephone_bureau}`);
+                    postResource(`/proprietes/${id}/increment-call`, {});
+                  }}
+                >
+                  <Ionicons name="call" size={16} color="#fff" />
+                  <Text style={ss.agentBtnText}>Appeler</Text>
                 </TouchableOpacity>
               )}
               {property.agent.whatsapp && (
-                <TouchableOpacity style={[styles.agentButton, styles.whatsappButton]} onPress={handleWhatsAppAgent}>
-                  <Ionicons name="logo-whatsapp" size={20} color="#fff" />
-                  <Text style={styles.agentButtonText}>WhatsApp</Text>
+                <TouchableOpacity
+                  style={[ss.agentBtn, { backgroundColor: '#25D366' }]}
+                  onPress={() => {
+                    const numero = property.agent!.whatsapp!.replace(/\D/g, '');
+                    Linking.openURL(
+                      `https://wa.me/${numero}?text=${encodeURIComponent(messageWhatsApp())}`
+                    );
+                    postResource(`/proprietes/${id}/increment-whatsapp`, {});
+                  }}
+                >
+                  <Ionicons name="logo-whatsapp" size={16} color="#fff" />
+                  <Text style={ss.agentBtnText}>WhatsApp</Text>
                 </TouchableOpacity>
               )}
               {property.agent.email && (
-                <TouchableOpacity style={[styles.agentButton, styles.emailButton]} onPress={handleEmailAgent}>
-                  <Ionicons name="mail" size={20} color="#fff" />
-                  <Text style={styles.agentButtonText}>Email</Text>
+                <TouchableOpacity
+                  style={[ss.agentBtn, { backgroundColor: T.secondary }]}
+                  onPress={() => Linking.openURL(`mailto:${property.agent!.email}`)}
+                >
+                  <Ionicons name="mail" size={16} color="#fff" />
+                  <Text style={ss.agentBtnText}>Email</Text>
                 </TouchableOpacity>
               )}
             </View>
           </View>
         )}
 
-        {/* Formulaire de visite */}
-        <View style={styles.formSection}>
-          <Text style={styles.formTitle}>Demander une visite</Text>
-          
+        {/* ── CARD: FORMULAIRE VISITE ── */}
+        <View style={ss.card}>
+          <SectionHeader title="Demander une visite" />
+
+          {[
+            { key: 'nom',       placeholder: 'Votre nom *',          keyboard: 'default'       as const },
+            { key: 'email',     placeholder: 'Votre email *',         keyboard: 'email-address' as const },
+            { key: 'telephone', placeholder: 'Votre téléphone',       keyboard: 'phone-pad'     as const },
+          ].map(f => (
+            <TextInput
+              key={f.key}
+              {...clavier.champ(f.key as any, { keyboardType: f.keyboard })}
+              style={ss.input}
+              placeholder={f.placeholder}
+              placeholderTextColor={T.muted}
+              value={(contactForm as any)[f.key]}
+              onChangeText={v => setContactForm(prev => ({ ...prev, [f.key]: v }))}
+            />
+          ))}
+
           <TextInput
-            style={styles.input}
-            placeholder="Votre nom *"
-            value={contactForm.nom}
-            onChangeText={(text) => handleContactFormChange('nom', text)}
-          />
-          
-          <TextInput
-            style={styles.input}
-            placeholder="Votre email *"
-            keyboardType="email-address"
-            value={contactForm.email}
-            onChangeText={(text) => handleContactFormChange('email', text)}
-          />
-          
-          <TextInput
-            style={styles.input}
-            placeholder="Votre téléphone"
-            keyboardType="phone-pad"
-            value={contactForm.telephone}
-            onChangeText={(text) => handleContactFormChange('telephone', text)}
-          />
-          
-          <TextInput
-            style={[styles.input, styles.textArea]}
+            {...clavier.champ('message', { multiligne: true })}
+            style={[ss.input, ss.textArea]}
             placeholder="Message *"
-            multiline
+            placeholderTextColor={T.muted}
             numberOfLines={4}
             value={contactForm.message}
-            onChangeText={(text) => handleContactFormChange('message', text)}
+            onChangeText={v => setContactForm(prev => ({ ...prev, message: v }))}
           />
 
           <TouchableOpacity
-            style={styles.submitButton}
+            style={ss.submitBtn}
             onPress={handleScheduleVisit}
             disabled={sending}
+            activeOpacity={0.85}
           >
-            {sending ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="calendar" size={20} color="#fff" />
-                <Text style={styles.submitButtonText}>Demander une visite</Text>
-              </>
-            )}
+            <LinearGradient
+              colors={[T.primary, '#0a80c4']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              style={ss.submitGradient}
+            >
+              {sending
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <>
+                    <Ionicons name="calendar" size={18} color="#fff" />
+                    <Text style={ss.submitText}>Envoyer la demande</Text>
+                  </>
+              }
+            </LinearGradient>
           </TouchableOpacity>
         </View>
 
-        {/* Map */}
-        {(property.latitude || property.longitude) && (
-          <View style={styles.mapSection}>
-            <Text style={styles.sectionTitle}>Localisation</Text>
-            <View style={styles.mapPlaceholder}>
-              <Ionicons name="map" size={40} color="#007AFF" />
-              <Text style={styles.mapText}>Voir sur Google Maps</Text>
-            </View>
-          </View>
-        )}
 
-        {/* Détails supplémentaires */}
-        <TouchableOpacity
-          style={styles.moreDetailsButton}
-          onPress={() => setShowMoreDetails(!showMoreDetails)}
-        >
-          <Text style={styles.moreDetailsText}>
-            {showMoreDetails ? 'Masquer les détails' : 'Afficher plus de détails'}
-          </Text>
-          <Ionicons
-            name={showMoreDetails ? 'chevron-up' : 'chevron-down'}
-            size={20}
-            color="#007AFF"
-          />
-        </TouchableOpacity>
-
-        {showMoreDetails && (
-          <View style={styles.moreDetails}>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Référence:</Text>
-              <Text style={styles.detailValue}>{property.reference || `PROP-${id}`}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Type de bien:</Text>
-              <Text style={styles.detailValue}>{getPropertyTypeLabel(property.type)}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>État:</Text>
-              <Text style={styles.detailValue}>{getEtatLabel(property.etat || '')}</Text>
-            </View>
-            {property.etage && (
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Étage:</Text>
-                <Text style={styles.detailValue}>{property.etage}</Text>
-              </View>
-            )}
-            {property.etages_immeuble && (
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Étages immeuble:</Text>
-                <Text style={styles.detailValue}>{property.etages_immeuble}</Text>
-              </View>
-            )}
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Date publication:</Text>
-              <Text style={styles.detailValue}>
-                {new Date(property.date_publication).toLocaleDateString('fr-FR')}
-              </Text>
-            </View>
-            {property.qualite_score && (
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Score qualité:</Text>
-                <Text style={styles.detailValue}>{property.qualite_score}%</Text>
-              </View>
-            )}
-            {property.views && (
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Vues:</Text>
-                <Text style={styles.detailValue}>{property.views}</Text>
-              </View>
-            )}
-          </View>
-        )}
-      </View>
-    </ScrollView>
+        <View style={{ height: 80 }} />
+      </ScrollView>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLES — same visual language as PropertiesScreen / PropertyCard
+// ─────────────────────────────────────────────────────────────────────────────
+const ss = StyleSheet.create({
+  root:       { flex: 1, backgroundColor: T.bg },
+  scroll:     { paddingBottom: 24 },
+
+  // Loader
+  loaderScreen: { flex: 1, backgroundColor: T.bg, justifyContent: 'center', alignItems: 'center' },
+  loaderText:   { marginTop: 12, color: T.primary, fontSize: 15, fontWeight: '600' },
+
+  // ── Gallery ──
+  galleryWrap: { height: 310, position: 'relative', backgroundColor: '#000' },
+  heroImg:     { width: '100%', height: '100%' },
+  heroGradient:{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 130 },
+
+  heroTopRow: {
+    position: 'absolute', top: 48, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingHorizontal: 18, zIndex: 10,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+  heroIconBtn: {
+    width: 40, height: 40, borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.40)',
+    justifyContent: 'center', alignItems: 'center',
   },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+
+  navBtn: {
+    position: 'absolute', top: '50%', marginTop: -20,
+    width: 40, height: 40, borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center', alignItems: 'center',
+    zIndex: 8,
   },
-  errorTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginTop: 16,
-    marginBottom: 20,
+  navBtnLeft:  { left: 12 },
+  navBtnRight: { right: 12 },
+
+  opBadge: {
+    position: 'absolute', bottom: 14, left: 16,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, marginBottom: 20 
   },
-  errorButton: {
-    backgroundColor: '#065483',
-    paddingHorizontal: 30,
-    paddingVertical: 12,
-    borderRadius: 8,
+  opBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700'},
+
+  imgCounter: {
+    position: 'absolute', bottom: 14, right: 16,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10,
   },
-  errorButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '500',
+  imgCounterText: { color: '#fff', fontSize: 12, fontWeight: '600' },
+
+  featuredBadge: {
+    position: 'absolute', top: 48, left: '50%', marginLeft: -42,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: T.secondary,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10,
   },
-  galleryContainer: {
-    height: 300,
-    position: 'relative',
+  featuredText: { color: '#fff', fontSize: 11, fontWeight: '800' },
+
+  // ── Thumbnails ──
+  thumbRow: { paddingHorizontal: 18, gap: 8, paddingVertical: 12 },
+  thumb: {
+    width: 64, height: 64, borderRadius: 14,
+    borderWidth: 2.5, borderColor: 'transparent',
+    overflow: 'hidden',
   },
-  mainImage: {
-    width: '100%',
-    height: '100%',
+  thumbActive: { borderColor: T.primary },
+  thumbImg:    { width: '100%', height: '100%' },
+
+  // ── Cards ──
+  card: {
+    backgroundColor: T.card,
+    borderRadius: 24,
+    padding: 18,
+    marginHorizontal: 14,
+    marginBottom: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    elevation: 4,
   },
-  backButton: {
-    position: 'absolute',
-    top: 40,
-    left: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 20,
-    padding: 8,
-    zIndex: 10,
+  infoCard: {
+    backgroundColor: T.card,
+    borderRadius: 24,
+    padding: 18,
+    marginHorizontal: 14,
+    marginBottom: 14,
+    marginTop: -28,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    elevation: 10,
   },
-  shareButton: {
-    position: 'absolute',
-    top: 40,
-    right: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 20,
-    padding: 8,
-    zIndex: 10,
-  },
-  navButton: {
-    position: 'absolute',
-    top: '50%',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 20,
-    padding: 8,
-    zIndex: 10,
-  },
-  prevButton: {
-    left: 10,
-  },
-  nextButton: {
-    right: 10,
-  },
-  badgesContainer: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    flexDirection: 'row',
-    gap: 8,
-  },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  badgeText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: 'bold',
-  },
-  imageCounter: {
-    position: 'absolute',
-    bottom: 20,
-    right: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  imageCounterText: {
-    color: '#fff',
-    fontSize: 12,
-  },
-  thumbnailsContainer: {
-    paddingHorizontal: 20,
-    marginTop: 10,
-  },
-  thumbnail: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    marginRight: 8,
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  thumbnailActive: {
-    borderColor: '#065483',
-  },
-  thumbnailImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 6,
-  },
-  infoContainer: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    marginTop: -20,
-    padding: 20,
-  },
+
+  // ── Price + Title ──
   price: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#065483',
-    marginBottom: 5,
+    fontSize: 26, fontWeight: '800', color: T.primary,
+    letterSpacing: -0.5, marginBottom: 4,
   },
   title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 10,
+    fontSize: 18, fontWeight: '700', color: T.text,
+    letterSpacing: -0.2, marginBottom: 10, lineHeight: 24,
   },
-  locationContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
+  locationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 4, marginBottom: 12 },
+  locationText:{ fontSize: 13, color: T.muted, flex: 1, fontWeight: '500', lineHeight: 18 },
+
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  metaPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: T.bg, paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 20, borderWidth: 1, borderColor: T.border,
   },
-  location: {
-    fontSize: 14,
-    color: '#666',
-    marginLeft: 5,
-    flex: 1,
+  metaText: { fontSize: 11, color: T.muted, fontWeight: '500' },
+
+  // ── Stats ──
+  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 4 },
+  statChip: {
+    flex: 1, minWidth: 70,
+    backgroundColor: T.accent,
+    borderRadius: 16, padding: 12,
+    alignItems: 'center', gap: 4,
   },
-  statsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 20,
-    marginBottom: 20,
-    paddingVertical: 15,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  statItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  statValue: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: '500',
-  },
-  section: {
-    marginBottom: 20,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 10,
-  },
-  description: {
-    fontSize: 15,
-    color: '#444',
-    lineHeight: 22,
-  },
-  amenitiesGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  amenityItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    width: '45%',
-  },
-  amenityText: {
-    fontSize: 14,
-    color: '#555',
-  },
-  speechContainer: {
-    alignItems: 'center',
-  },
-  languageSelector: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 15,
-  },
-  languageOption: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  languageOptionActive: {
-    backgroundColor: '#065483',
-  },
-  languageFlag: {
-    fontSize: 20,
-  },
-  speechButton: {
-    alignItems: 'center',
-  },
-  speechButtonActive: {
-    opacity: 0.8,
-  },
-  speechButtonText: {
-    fontSize: 14,
-    color: '#065483',
-    marginTop: 5,
-  },
-  agentSection: {
-    backgroundColor: '#f8f8f8',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 20,
-  },
-  agentHeader: {
-    flexDirection: 'row',
-    marginBottom: 15,
-  },
-  agentImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    marginRight: 15,
-  },
-  agentInfo: {
-    flex: 1,
-  },
-  agentName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  agentTitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 5,
-  },
-  agentRating: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  ratingText: {
-    fontSize: 12,
-    color: '#666',
-    marginLeft: 5,
-  },
-  agentActions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  agentButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-    borderRadius: 8,
-    gap: 5,
-  },
-  callButton: {
-    backgroundColor: '#065483',
-  },
-  whatsappButton: {
-    backgroundColor: '#25D366',
-  },
-  emailButton: {
-    backgroundColor: '#FF9500',
-  },
-  agentButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  formSection: {
-    backgroundColor: '#f8f8f8',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 20,
-  },
-  formTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 15,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    fontSize: 14,
+  statIconWrap: {
+    width: 36, height: 36, borderRadius: 12,
     backgroundColor: '#fff',
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 2,
+    shadowColor: T.primary, shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12, shadowRadius: 4, elevation: 2,
   },
-  textArea: {
-    height: 100,
-    textAlignVertical: 'top',
-  },
-  submitButton: {
-    backgroundColor: '#065483',
-    borderRadius: 8,
-    padding: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  submitButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  mapSection: {
-    marginBottom: 20,
-  },
-  mapPlaceholder: {
-    height: 200,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  mapText: {
-    fontSize: 16,
-    color: '#065483',
-    marginTop: 10,
-  },
-  moreDetailsButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-    gap: 5,
-  },
-  moreDetailsText: {
-    fontSize: 14,
-    color: '#065483',
-    fontWeight: '500',
-  },
-  moreDetails: {
-    backgroundColor: '#f8f8f8',
-    borderRadius: 10,
-    padding: 15,
-  },
-  detailRow: {
-    flexDirection: 'row',
+  statValue:  { fontSize: 15, fontWeight: '800', color: T.text },
+  statLabel:  { fontSize: 11, color: T.muted, fontWeight: '500' },
+
+  qualityRow: {
+    flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    marginTop: 12, paddingTop: 12,
+    borderTopWidth: 1, borderTopColor: T.border,
   },
-  detailLabel: {
-    fontSize: 14,
-    color: '#666',
+  qualityLabel: { fontSize: 13, fontWeight: '600', color: T.sub },
+  dot:  { width: 9, height: 9, borderRadius: 5 },
+  dotLabel: { fontSize: 12, color: T.muted, fontWeight: '600', marginLeft: 4 },
+
+  // ── Section header ──
+  sectionHeader: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 14,
   },
-  detailValue: {
-    fontSize: 14,
-    color: '#333',
+  sectionBar:   { width: 3, height: 18, backgroundColor: T.secondary, borderRadius: 2, marginRight: 8 },
+  sectionTitle: { fontSize: 15, fontWeight: '800', color: T.text, letterSpacing: -0.2 },
+
+  // ── Amenities ──
+  amenityGroupLabel: { fontSize: 12, fontWeight: '700', color: T.muted, marginBottom: 8, letterSpacing: 0.5 },
+  amenityGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  amenityPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: T.accent, paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1, borderColor: T.primary + '25',
+  },
+  amenityText: { fontSize: 12, color: T.primary, fontWeight: '700' },
+
+  // ── Speech ──
+  langRow: { flexDirection: 'row', gap: 8, marginBottom: 14, flexWrap: 'wrap' },
+  langBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20,
+    backgroundColor: T.bg, borderWidth: 1.5, borderColor: T.border,
+  },
+  langBtnOn:   { backgroundColor: T.accent, borderColor: T.primary },
+  langFlag:    { fontSize: 16 },
+  langName:    { fontSize: 12, color: T.muted, fontWeight: '500' },
+  langNameOn:  { color: T.primary, fontWeight: '700' },
+
+  speechBtn:       { borderRadius: 16, overflow: 'hidden' },
+  speechBtnActive: { opacity: 0.9 },
+  speechGradient: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 10, paddingVertical: 14, borderRadius: 16,
+  },
+  speechBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+
+  // ── Agent ──
+  agentHeader: { flexDirection: 'row', gap: 14, marginBottom: 16, alignItems: 'center' },
+  agentAvatar: {
+    width: 56, height: 56, borderRadius: 18,
+    borderWidth: 2.5, borderColor: T.secondary,
+  },
+  agentName:  { fontSize: 15, fontWeight: '800', color: T.text, marginBottom: 2 },
+  agentTitle: { fontSize: 12, color: T.muted, fontWeight: '500', marginBottom: 4 },
+  ratingRow:  { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  ratingText: { fontSize: 11, color: T.muted, marginLeft: 4, fontWeight: '500' },
+
+  agentActions: { flexDirection: 'row', gap: 10 },
+  agentBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 12, borderRadius: 16,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25, shadowRadius: 6, elevation: 4,
+  },
+  agentBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+
+  // Bandeau explicatif affiché à la place des coordonnées d'un agent masqué.
+  masqueNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#e0edf8',
+    borderRadius: 14,
+    padding: 12,
+  },
+  masqueNoticeText: {
+    flex: 1,
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: T.primary,
     fontWeight: '500',
   },
+
+  // ── Form ──
+  input: {
+    backgroundColor: T.bg, borderRadius: 14, padding: 14,
+    fontSize: 14, color: T.sub,
+    borderWidth: 1.5, borderColor: T.border, marginBottom: 10,
+  },
+  textArea: { height: 110, textAlignVertical: 'top' },
+
+  submitBtn:      { borderRadius: 16, overflow: 'hidden', marginTop: 4 },
+  submitGradient: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 10, paddingVertical: 15, borderRadius: 16,
+  },
+  submitText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+
+  // ── More details ──
+  moreToggle: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  detailsTable: { marginTop: 4, borderRadius: 14, overflow: 'hidden' },
+  detailRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingVertical: 10, paddingHorizontal: 4,
+    borderBottomWidth: 1, borderBottomColor: T.border,
+  },
+  detailRowAlt: { backgroundColor: T.bg },
+  detailLabel:  { fontSize: 13, color: T.muted, fontWeight: '500' },
+  detailValue:  { fontSize: 13, color: T.sub,   fontWeight: '700' },
 });

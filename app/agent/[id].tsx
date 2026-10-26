@@ -1,3 +1,5 @@
+import { getResource, postResource } from '@/services/api';
+import { estAgentDjamabizz } from '@/utils/djamabizz';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -17,13 +19,15 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { getResource, postResource } from '../../../services/api';
 
 const { width } = Dimensions.get('window');
 
 interface Agent {
   id_agent: number;
-  utilisateur: { nom: string; prenom: string; email?: string; photo_profil?: string };
+  utilisateur: { nom: string; prenom: string; email?: string; photo_profil?: string; role?: string };
+  // Drapeau calculé renvoyé par l'API (App\Models\Agent::est_djamabizz).
+  est_djamabizz?: boolean;
+  type_agent?: string;
   titre: string;
   biographie?: string;
   telephone_bureau?: string;
@@ -99,6 +103,10 @@ export default function AgentProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [loading, setLoading] = useState(true);
   const [agent, setAgent] = useState<Agent | null>(null);
+  // Vrai si la fiche demandée appartient à un compte DjamaBizz : le profil
+  // n'est alors jamais rendu, quel que soit le chemin d'arrivée (lien direct,
+  // deep link, historique de navigation…).
+  const [profilMasque, setProfilMasque] = useState(false);
   const [properties, setProperties] = useState<Property[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [form, setForm] = useState({ nom: '', email: '', telephone: '', message: '' });
@@ -111,6 +119,15 @@ export default function AgentProfileScreen() {
       setLoading(true);
       const r = await getResource(`/agents-public/${id}`);
       if (r?.data) {
+        // ── Profil DjamaBizz : accès interdit ────────────────────────────
+        // On n'enregistre NI l'agent, NI ses annonces, NI ses avis : rien de
+        // sa fiche n'atteint le rendu. L'écran affiche un message neutre.
+        if (estAgentDjamabizz(r.data)) {
+          setProfilMasque(true);
+          setAgent(null);
+          return;
+        }
+
         setAgent(r.data);
         await Promise.all([
           getResource(`/proprietes?id_agent=${id}&statut=disponible&limit=6`).then(res => {
@@ -168,7 +185,7 @@ export default function AgentProfileScreen() {
       <Image
         source={p.images?.[0]
           ? { uri: `${process.env.EXPO_PUBLIC_STORAGE_URL}/storage/${p.images[0].url}` }
-          : require('../../../assets/images/default-property.jpg')}
+          : require('../../assets/images/default-property.jpg')}
         style={s.propImage}
       />
       <LinearGradient colors={['transparent', 'rgba(0,0,0,0.6)']} style={s.propGradient} />
@@ -216,6 +233,22 @@ export default function AgentProfileScreen() {
     </View>
   );
 
+  // Fiche d'un compte DjamaBizz : message neutre, sans aucune donnée
+  // personnelle, avec renvoi vers l'annonce ou l'annuaire public.
+  if (profilMasque) return (
+    <View style={s.loader}>
+      <Ionicons name="lock-closed-outline" size={60} color="#cbd5e1" />
+      <Text style={s.loaderText}>Profil non consultable</Text>
+      <Text style={[s.loaderText, { fontSize: 13, fontWeight: '400', textAlign: 'center', paddingHorizontal: 40 }]}>
+        Cette annonce est gérée directement par Shop Immobilier. Utilisez le
+        formulaire de contact de l'annonce pour être mis en relation.
+      </Text>
+      <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+        <Text style={s.backBtnText}>Retour</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   if (!agent) return (
     <View style={s.loader}>
       <Ionicons name="person-outline" size={60} color="#cbd5e1" />
@@ -235,7 +268,7 @@ export default function AgentProfileScreen() {
 
       {/* ── Cover + Avatar ── */}
       <View style={s.cover}>
-        <ImageBackground source={require('../../../assets/images/sh26.jpg')} style={s.heroSection}  />
+        <ImageBackground source={require('../../assets/images/sh26.jpg')} style={s.heroSection}  />
         
         <TouchableOpacity style={s.coverBack} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
@@ -246,7 +279,7 @@ export default function AgentProfileScreen() {
           <Image
             source={agent.utilisateur?.photo_profil
               ? { uri: `${process.env.EXPO_PUBLIC_STORAGE_URL}/storage/${agent.utilisateur.photo_profil}` }
-              : require('../../../assets/images/default-agent.jpg')}
+              : require('../../assets/images/default-agent.jpg')}
             style={s.avatar}
           />
           {agent.verifie && (

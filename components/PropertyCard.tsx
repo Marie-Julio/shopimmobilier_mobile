@@ -149,7 +149,9 @@ const PropertyCard: React.FC<PropertyCardProps> = ({
           )}
         </View>
 
-        {/* Agent */}
+        {/* Agent : traité de façon identique quel que soit son rôle
+            (agent classique ou djamabizz), conformément à la décision
+            produit du 30/08/2026 — plus de bloc neutre ni de masquage. */}
         {property.agent && (
           <TouchableOpacity style={styles.agentContainer} onPress={onAgentPress}>
             <Image 

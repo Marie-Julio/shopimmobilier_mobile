@@ -30,7 +30,12 @@ export interface Property {
       nom?: string;
       prenom?: string;
       photo_profil?: string;
+      // Rôle du compte rattaché : sert à masquer les comptes 'djamabizz'.
+      role?: string;
     };
+    // Drapeau calculé renvoyé par l'API (App\Models\Agent::est_djamabizz).
+    est_djamabizz?: boolean;
+    type_agent?: string;
   };
   date_publication: string;
   date_collecte?: string;

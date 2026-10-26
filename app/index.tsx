@@ -188,6 +188,8 @@ export default function SplashScreen() {
           style={styles.button}
           onPress={() => router.replace('/(tabs)')}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Découvrir"
         >
           <View style={styles.buttonBackground}>
             <Text style={styles.buttonText}>Découvrir</Text>
@@ -263,7 +265,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 3,
   },
   subtagline2: {
-    fontSize: 18,
+    fontSize: 22,
     color: 'rgba(255,255,255,0.8)',
     paddingTop: 20,
     marginBottom: 250,

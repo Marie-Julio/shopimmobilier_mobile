@@ -41,6 +41,29 @@
           }
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "L'application a besoin d'accéder à vos photos pour ...",
+          "cameraPermission": "L'application a besoin d'accéder à votre caméra pour ...",
+          "androidPermissions": {
+            "READ_MEDIA_IMAGES": false,
+            "READ_MEDIA_VIDEO": false,
+            "RECORD_AUDIO": false
+          }
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "permissions": [
+              "android.permission.INTERNET",
+              "android.permission.VIBRATE"
+            ]
+          }
+        }
+      ],
       "expo-secure-store",
       "expo-build-properties"
     ],

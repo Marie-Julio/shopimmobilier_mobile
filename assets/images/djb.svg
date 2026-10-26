@@ -1,0 +1,46 @@
+<svg viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="orangeGrad5" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFB020"/>
+      <stop offset="100%" stop-color="#FF7A00"/>
+    </linearGradient>
+    <linearGradient id="navyGrad5" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0A1F44"/>
+      <stop offset="100%" stop-color="#132B5E"/>
+    </linearGradient>
+    <linearGradient id="billGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2FA84F"/>
+      <stop offset="55%" stop-color="#1E7F3B"/>
+      <stop offset="100%" stop-color="#0F5C27"/>
+    </linearGradient>
+    <filter id="billShadow2" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="600" height="400" fill="#FFFFFF"/>
+
+  <!-- 1. Lettre B en arriere-plan (le billet passera devant, cachant sa moitie gauche) -->
+  <text x="300" y="250" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="200" letter-spacing="-6" text-anchor="middle">
+    <tspan fill="transparent">Dj</tspan><tspan fill="url(#navyGrad5)">B</tspan>
+  </text>
+
+  <!-- 2. Billet de banque, positionne entre j et B, devant B / derriere D-j -->
+  <g transform="translate(305,205) rotate(-6)" filter="url(#billShadow2)">
+    <rect x="-115" y="-68" width="230" height="136" rx="10" fill="url(#billGrad3)" stroke="#FFD84D" stroke-width="4"/>
+    <rect x="-100" y="-53" width="200" height="106" rx="5" fill="none" stroke="#FFD84D" stroke-width="2" stroke-dasharray="5 4"/>
+    <circle cx="-83" cy="-38" r="12" fill="none" stroke="#FFD84D" stroke-width="2"/>
+    <circle cx="83" cy="38" r="12" fill="none" stroke="#FFD84D" stroke-width="2"/>
+    <text x="-83" y="-33" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" fill="#FFD84D" font-weight="900">$</text>
+    <text x="83" y="43" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" fill="#FFD84D" font-weight="900">$</text>
+    <circle cx="0" cy="0" r="36" fill="#0F5C27" stroke="#FFD84D" stroke-width="3"/>
+    <text x="0" y="14" font-family="Arial, sans-serif" font-size="36" font-weight="900" text-anchor="middle" fill="#FFD84D">$</text>
+    <path d="M-100 -24 Q0 -48 100 -24" stroke="#FFD84D" stroke-width="1.2" fill="none" opacity="0.7"/>
+    <path d="M-100 24 Q0 48 100 24" stroke="#FFD84D" stroke-width="1.2" fill="none" opacity="0.7"/>
+  </g>
+
+  <!-- 3. Lettres D et j au premier plan (devant le billet) -->
+  <text x="300" y="250" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="200" letter-spacing="-6" text-anchor="middle">
+    <tspan fill="url(#navyGrad5)">D</tspan><tspan fill="url(#orangeGrad5)">j</tspan><tspan fill="transparent">B</tspan>
+  </text>
+</svg>

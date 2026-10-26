@@ -1,3 +1,5 @@
+import { getResource } from '@/services/api';
+import { filtrerAgentsVisibles } from '@/utils/djamabizz';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -17,7 +19,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { getResource } from '../../../services/api';
 
 const { width } = Dimensions.get('window');
 
@@ -28,7 +29,12 @@ interface Agent {
     prenom: string;
     email?: string;
     photo_profil?: string;
+    // Rôle du compte rattaché : sert à écarter les comptes 'djamabizz'.
+    role?: string;
   };
+  // Drapeau calculé renvoyé par l'API (App\Models\Agent::est_djamabizz).
+  est_djamabizz?: boolean;
+  type_agent?: string;
   proprietes_count: number;
   titre: string;
   telephone_bureau?: string;
@@ -59,8 +65,12 @@ export default function AgentsScreen() {
       setLoading(true);
       const response = await getResource('/agents?verifie=1');
       if (response?.data?.data) {
-        setAgents(response.data.data);
-        setFilteredAgents(response.data.data);
+        // Les comptes DjamaBizz ne figurent jamais dans l'annuaire public :
+        // on les retire dès la réception, avant même de les stocker, pour
+        // qu'aucun rendu intermédiaire ne puisse les laisser apparaître.
+        const visibles = filtrerAgentsVisibles<Agent>(response.data.data);
+        setAgents(visibles);
+        setFilteredAgents(visibles);
       }
     } catch (e) {
       console.error('Erreur agents:', e);
@@ -79,7 +89,9 @@ export default function AgentsScreen() {
   };
 
   const filterAgents = () => {
-    let f = [...agents];
+    // Filet de sécurité : même si un agent djamabizz se glissait dans `agents`
+    // (mise en cache, réponse API modifiée…), il ne peut pas être affiché.
+    let f = filtrerAgentsVisibles<Agent>(agents);
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
       f = f.filter(a =>
@@ -116,7 +128,7 @@ export default function AgentsScreen() {
               source={
                 agent.utilisateur?.photo_profil
                   ? { uri: `${process.env.EXPO_PUBLIC_STORAGE_URL}/storage/${agent.utilisateur.photo_profil}` }
-                  : require('../../../assets/images/default-agent.jpg')
+                  : require('../../assets/images/default-agent.jpg')
               }
               style={styles.avatar}
             />
@@ -252,7 +264,7 @@ export default function AgentsScreen() {
 
       {/* ── Hero ── */}
       <ImageBackground
-        source={require('../../../assets/images/sh26.jpg')}
+        source={require('../../assets/images/sh26.jpg')}
         style={styles.hero}
         imageStyle={styles.heroImg}
       >
@@ -262,6 +274,16 @@ export default function AgentsScreen() {
           end={{ x: 1, y: 1 }}
           style={styles.heroOverlay}
         >
+          {/* Bouton demi-tour */}
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => router.back()}
+            activeOpacity={0.8}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="arrow-back" size={20} color="#fff" />
+          </TouchableOpacity>
+
           <Text style={styles.heroTitle}>Nos Agents</Text>
           <Text style={styles.heroSubtitle}>
             {filteredAgents.length} expert{filteredAgents.length > 1 ? 's' : ''} disponible{filteredAgents.length > 1 ? 's' : ''}
@@ -372,6 +394,19 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 36,
     borderBottomRightRadius: 36,
     justifyContent: 'flex-end',
+  },
+  backBtn: {
+    position: 'absolute',
+    top: 56,
+    left: 22,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   heroEyebrow: {
     fontSize: 11,

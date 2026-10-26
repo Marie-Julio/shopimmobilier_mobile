@@ -1,3 +1,5 @@
+import { useFormulaireClavier } from '@/hooks/useFormulaireClavier';
+import { postResource } from '@/services/api';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useState } from 'react';
@@ -13,7 +15,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { postResource } from '../../../services/api';
 
 const CONTACT_INFO = [
   {
@@ -63,6 +64,8 @@ export default function ContactScreen() {
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [focused, setFocused] = useState<string | null>(null);
+  // Remontée du champ au-dessus du clavier + « Entrée » = champ suivant.
+  const clavier = useFormulaireClavier(['nom', 'email', 'telephone', 'sujet', 'message']);
 
   const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }));
 
@@ -87,7 +90,7 @@ export default function ContactScreen() {
   };
 
   return (
-    <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
+    <ScrollView {...clavier.propsScrollView} style={s.container} showsVerticalScrollIndicator={false}>
 
       {/* ── Hero ── */}
       <ImageBackground
@@ -157,14 +160,16 @@ export default function ContactScreen() {
             <View style={[s.inputWrap, focused === f.key && s.inputWrapFocused]}>
               <Ionicons name={f.icon as any} size={18} color={focused === f.key ? '#065483' : '#94a3b8'} />
               <TextInput
+                {...clavier.champ(f.key as 'nom' | 'email' | 'telephone' | 'sujet', {
+                  keyboardType: f.keyboard as any,
+                  onFocus: () => setFocused(f.key),
+                })}
                 style={s.input}
                 placeholder={f.placeholder}
                 placeholderTextColor="#94a3b8"
-                keyboardType={f.keyboard as any}
                 autoCapitalize="none"
                 value={(form as any)[f.key]}
                 onChangeText={v => set(f.key, v)}
-                onFocus={() => setFocused(f.key)}
                 onBlur={() => setFocused(null)}
               />
             </View>
@@ -182,15 +187,17 @@ export default function ContactScreen() {
               style={{ marginTop: 2 }}
             />
             <TextInput
+              {...clavier.champ('message', {
+                multiligne: true,
+                onFocus: () => setFocused('message'),
+              })}
               style={[s.input, s.textArea]}
               placeholder="Décrivez votre demande en détail…"
               placeholderTextColor="#94a3b8"
-              multiline
               numberOfLines={5}
               textAlignVertical="top"
               value={form.message}
               onChangeText={v => set('message', v)}
-              onFocus={() => setFocused('message')}
               onBlur={() => setFocused(null)}
             />
           </View>
@@ -357,6 +364,7 @@ const s = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.15,
     shadowRadius: 10,
+    margin: 'auto',
     overflow: 'hidden',
   },
   methodIconBox: {
@@ -366,9 +374,10 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.2)',
     justifyContent: 'center',
     alignItems: 'center',
+    margin: 'auto',
     marginBottom: 12,
   },
-  methodLabel: { fontSize: 15, fontWeight: '800', letterSpacing: -0.2, marginBottom: 4 },
+  methodLabel: { fontSize: 15, margin: 'auto', fontWeight: '800', letterSpacing: -0.2, marginBottom: 4 },
   methodValue: { fontSize: 11, fontWeight: '500', lineHeight: 16 },
   methodArrow: { position: 'absolute', bottom: 16, right: 16 },
 

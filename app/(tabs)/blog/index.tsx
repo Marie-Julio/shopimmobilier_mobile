@@ -1,3 +1,4 @@
+import { getResource } from '@/services/api';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -15,7 +16,6 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import { getResource } from '../../../services/api';
 
 const { width } = Dimensions.get('window');
 
@@ -94,9 +94,6 @@ export default function BlogScreen() {
       <Image source={imgSrc(blog)} style={StyleSheet.absoluteFillObject as any} />
       <LinearGradient colors={['transparent', 'rgba(6,84,131,0.92)']} style={styles.featGradient} />
       <View style={styles.featContent}>
-        <View style={styles.catPill}>
-          <Text style={styles.catPillText}>{CAT_LABELS[blog.categorie] || blog.categorie}</Text>
-        </View>
         <Text style={styles.featTitle} numberOfLines={2}>{blog.titre}</Text>
         {blog.extrait && <Text style={styles.featExcerpt} numberOfLines={2}>{blog.extrait}</Text>}
         <View style={styles.featMeta}>
@@ -128,9 +125,6 @@ export default function BlogScreen() {
     >
       <Image source={imgSrc(blog)} style={styles.cardImage} />
       <View style={styles.cardBody}>
-        <View style={styles.cardCatPill}>
-          <Text style={styles.cardCatText}>{CAT_LABELS[blog.categorie] || blog.categorie}</Text>
-        </View>
         <Text style={styles.cardTitle} numberOfLines={2}>{blog.titre}</Text>
         {blog.extrait && <Text style={styles.cardExcerpt} numberOfLines={2}>{blog.extrait}</Text>}
         <View style={styles.cardFooter}>

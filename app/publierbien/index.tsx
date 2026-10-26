@@ -1,11 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
-  Modal,
+  Dimensions,
   ScrollView,
   StyleSheet,
   Switch,
@@ -14,50 +14,101 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import { getResource, postResource } from '../../services/api';
+import { useFormulaireClavier } from '@/hooks/useFormulaireClavier';
+import { postFile, postResource } from '../../services/api';
 
-interface Property {
-  id_propriete: number;
+const { width } = Dimensions.get('window');
+
+// ---------- Types ----------
+type Phase = 'owner' | 'choice' | 'property' | 'success' | 'loading';
+
+type OwnerDataType = {
+  type: 'proprietaire' | 'agence' | 'demarcheur';
+  nom_prenom: string;
+  telephone: string;
+  ville_residence: string;
+  situation_matrimoniale: string;
+  vit_dans_cour: boolean;
+  ville_bien: string;
+  quartier_bien: string;
+  type_bien: string;
+  nombre_chambres: string;
+  nombre_douches: string;
+  cuisine: boolean;
+  balcon: boolean;
+  cour_interne: boolean;
+  espace_parking: boolean;
+  garage_accessible: boolean;
+  type_batiment: string;
+  etat_bien: string;
+  duree_location: string;
+  montant_loyer: string;
+  conditions_location: string;
+  colocation_autorisee: boolean;
+  profession_souhaitee: string;
+  type_locataire: string;
+  nombre_max_occupants: string;
+  criteres_specifiques: string;
+  acces_eau: string;
+  electricite: string;
+  gardien: boolean;
+  portail: boolean;
+  cameras: boolean;
+  accessibilite: string;
+  environnement: string;
+  proximite_ecoles: boolean;
+  proximite_marche: boolean;
+  proximite_transport: boolean;
+  proximite_lieu_culte: boolean;
+  animaux_autorises: boolean;
+  autres_exigences: string;
+};
+
+type PropertyDataType = {
   titre: string;
+  description: string;
+  type: string;
+  operation: string;
+  prix: string;
+  devise: string;
+  surface: string;
+  chambres: string;
+  salles_de_bain: string;
   adresse: string;
   ville: string;
-  prix: number;
-  devise: string;
-  operation: string;
-  type: string;
-  surface?: number;
-  chambres?: number;
   quartier: string;
+  pays: string;
+  etat: string;
+  annee_construction: string;
+  meuble: boolean;
+  climatisation: boolean;
   parking: boolean;
-}
+  jardin: boolean;
+  terrasse: boolean;
+  piscine: boolean;
+  images: ImagePicker.ImagePickerAsset[];
+  video: ImagePicker.ImagePickerAsset | null;
+};
 
-export default function ProprietaireScreen() {
-  const [properties, setProperties] = useState<Property[]>([]);
-  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
-  const [propertySearchTerm, setPropertySearchTerm] = useState('');
-  const [showPropertyDropdown, setShowPropertyDropdown] = useState(false);
-  const [loadingProperties, setLoadingProperties] = useState(false);
+// ---------- Composant principal ----------
+export default function PublierPropriete() {
+  // États de phase et navigation
+  const [phase, setPhase] = useState<Phase>('owner');
+  const [ownerStep, setOwnerStep] = useState(1);
+  const [propertyStep, setPropertyStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [loadingData, setLoadingData] = useState(true);
-  const [formSubmitted, setFormSubmitted] = useState(false);
   const [ownerId, setOwnerId] = useState<number | null>(null);
-  const [property, setProperty] = useState<Property | null>(null);
-// Ajoutez cette ligne après les déclarations useState
-const filteredProperties = properties.filter(
-  (prop) =>
-    prop.titre?.toLowerCase().includes(propertySearchTerm.toLowerCase()) ||
-    prop.adresse?.toLowerCase().includes(propertySearchTerm.toLowerCase()) ||
-    prop.ville?.toLowerCase().includes(propertySearchTerm.toLowerCase())
-);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [successMessage, setSuccessMessage] = useState('');
 
-  const [formData, setFormData] = useState({
-    // Section 1: Informations du propriétaire
+  // Données propriétaire
+  const [ownerData, setOwnerData] = useState<OwnerDataType>({
+    type: 'proprietaire',
     nom_prenom: '',
     telephone: '',
     ville_residence: '',
     situation_matrimoniale: '',
     vit_dans_cour: false,
-    // Section 2: Informations sur le bien
     ville_bien: '',
     quartier_bien: '',
     type_bien: '',
@@ -70,17 +121,14 @@ const filteredProperties = properties.filter(
     garage_accessible: false,
     type_batiment: '',
     etat_bien: '',
-    // Section 3: Conditions de location
     duree_location: '',
     montant_loyer: '',
     conditions_location: '',
     colocation_autorisee: false,
-    // Section 4: Profil du locataire recherché
     profession_souhaitee: '',
     type_locataire: '',
     nombre_max_occupants: '',
     criteres_specifiques: '',
-    // Section 5: Détails supplémentaires
     acces_eau: '',
     electricite: '',
     gardien: false,
@@ -94,964 +142,1327 @@ const filteredProperties = properties.filter(
     proximite_lieu_culte: false,
     animaux_autorises: false,
     autres_exigences: '',
-    id_propriete: null as number | null,
-    id_proprietaire: null as number | null,
   });
 
-  useEffect(() => {
-    if (selectedProperty) {
-      fetchPropertyAndOwner();
-    }
-  }, [selectedProperty]);
+  // Remontée du champ au-dessus du clavier + « Entrée » = champ suivant.
+  const clavier = useFormulaireClavier(['nom_prenom', 'telephone', 'ville_residence', 'ville_bien', 'quartier_bien', 'montant_loyer', 'nombre_chambres', 'nombre_douches', 'conditions_location', 'profession_souhaitee', 'nombre_max_occupants', 'criteres_specifiques', 'autres_exigences']);
 
-  const fetchProperties = async () => {
-    try {
-      setLoadingProperties(true);
-      const response = await getResource('/proprietes');
-      if (response?.data?.data) {
-        setProperties(response.data.data);
-      }
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible de charger les propriétés');
-    } finally {
-      setLoadingProperties(false);
-    }
+
+  // Données annonce
+  const [propertyData, setPropertyData] = useState<PropertyDataType>({
+    titre: '',
+    description: '',
+    type: 'appartement',
+    operation: 'location',
+    prix: '',
+    devise: 'GNF',
+    surface: '',
+    chambres: '',
+    salles_de_bain: '',
+    adresse: '',
+    ville: '',
+    quartier: '',
+    pays: 'Guinée',
+    etat: 'bon',
+    annee_construction: '',
+    meuble: false,
+    climatisation: false,
+    parking: false,
+    jardin: false,
+    terrasse: false,
+    piscine: false,
+    images: [],
+    video: null,
+  });
+
+  // Helpers
+  const handleOwnerChange = (name: keyof OwnerDataType, value: any) => {
+    setOwnerData((prev) => ({ ...prev, [name]: value }));
+    setErrors((prev) => ({ ...prev, [name]: '' }));
   };
 
-  const fetchPropertyAndOwner = async () => {
-    if (!selectedProperty) return;
-
-    try {
-      setLoadingData(true);
-      // Récupérer les infos de la propriété
-      const propertyRes = await getResource(`/proprietes/${selectedProperty.id_propriete}`);
-      if (propertyRes && propertyRes.data) {
-        const prop = propertyRes.data;
-        setProperty(prop);
-        setFormData(prev => ({
-          ...prev,
-          ville_bien: prop.ville || '',
-          quartier_bien: prop.quartier || '',
-          type_bien: prop.type || '',
-          nombre_chambres: prop.chambres?.toString() || '',
-          nombre_douches: prop.salles_de_bain?.toString() || '',
-          espace_parking: prop.parking || false,
-          montant_loyer: prop.prix?.toString() || '',
-          id_propriete: selectedProperty.id_propriete,
-        }));
-      }
-
-      // Vérifier si un propriétaire existe déjà pour cette propriété
-      const ownerRes = await getResource(`/proprietaires?id_propriete=${selectedProperty.id_propriete}`);
-      if (ownerRes && ownerRes.data && ownerRes.data.data && ownerRes.data.data.length > 0) {
-        const owner = ownerRes.data.data[0];
-        setOwnerId(owner.id_proprietaire);
-        setFormData(prev => ({
-          ...prev,
-          nom_prenom: owner.nom_prenom || '',
-          telephone: owner.telephone || '',
-          ville_residence: owner.ville_residence || '',
-          situation_matrimoniale: owner.situation_matrimoniale || '',
-          vit_dans_cour: owner.vit_dans_cour || false,
-          ...owner,
-          id_proprietaire: owner.id_proprietaire,
-          id_propriete: selectedProperty.id_propriete,
-        }));
-      }
-    } catch (err) {
-      Alert.alert('Erreur', 'Erreur lors du chargement des données');
-    } finally {
-      setLoadingData(false);
-    }
-  };
-
-  const handleChange = (name: string, value: any) => {
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleNumberChange = (name: string, text: string) => {
+  const handleOwnerNumber = (name: keyof OwnerDataType, text: string) => {
     if (text === '' || /^\d+$/.test(text)) {
-      handleChange(name, text);
+      handleOwnerChange(name, text);
     }
   };
 
-  const handlePropertySelect = async (prop: Property) => {
-    setSelectedProperty(prop);
-    setPropertySearchTerm(`${prop.titre} - ${prop.adresse}, ${prop.ville}`);
-    setShowPropertyDropdown(false);
-    setFormData((prev) => ({ 
-      ...prev, 
-      id_propriete: prop.id_propriete,
-      montant_loyer: prop.prix?.toString() || '',
+  const handlePropertyChange = (name: keyof PropertyDataType, value: any) => {
+    setPropertyData((prev) => ({ ...prev, [name]: value }));
+    setErrors((prev) => ({ ...prev, [name]: '' }));
+  };
+
+  const pickImages = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets) {
+      setPropertyData((prev) => ({
+        ...prev,
+        images: [...prev.images, ...result.assets],
+      }));
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setPropertyData((prev) => ({
+      ...prev,
+      images: prev.images.filter((_, i) => i !== index),
     }));
   };
 
-  const validateForm = () => {
-    if (!formData.nom_prenom.trim()) {
-      Alert.alert('Champ requis', 'Veuillez saisir le nom et prénom du propriétaire');
-      return false;
+  const pickVideo = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['videos'],
+      allowsEditing: true,
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setPropertyData((prev) => ({ ...prev, video: result.assets[0] }));
     }
-    if (!formData.telephone.trim()) {
-      Alert.alert('Champ requis', 'Veuillez saisir le numéro de téléphone');
-      return false;
-    }
-    if (!formData.ville_residence.trim()) {
-      Alert.alert('Champ requis', 'Veuillez saisir la ville de résidence');
-      return false;
-    }
-    if (!formData.ville_bien.trim()) {
-      Alert.alert('Champ requis', 'Veuillez saisir la ville du bien');
-      return false;
-    }
-    if (!formData.quartier_bien.trim()) {
-      Alert.alert('Champ requis', 'Veuillez saisir le quartier du bien');
-      return false;
-    }
-    if (!formData.type_bien) {
-      Alert.alert('Champ requis', 'Veuillez sélectionner le type de bien');
-      return false;
-    }
-    if (!formData.montant_loyer.trim()) {
-      Alert.alert('Champ requis', 'Veuillez saisir le montant du loyer');
-      return false;
-    }
-    return true;
   };
 
-  const handleSubmit = async () => {
-    if (!validateForm()) return;
+  const removeVideo = () => {
+    setPropertyData((prev) => ({ ...prev, video: null }));
+  };
 
+  const populatePropertyFromOwner = () => {
+    setPropertyData((prev) => ({
+      ...prev,
+      ville: ownerData.ville_bien,
+      quartier: ownerData.quartier_bien,
+      type: ownerData.type_bien || 'appartement',
+      chambres: ownerData.nombre_chambres,
+      salles_de_bain: ownerData.nombre_douches,
+      prix: ownerData.montant_loyer,
+      parking: ownerData.espace_parking,
+    }));
+  };
+
+  // Validations
+  const validateOwnerStep = (step: number): boolean => {
+    const newErrors: Record<string, string> = {};
+    if (step === 1) {
+      if (ownerData.type === 'proprietaire' && !ownerData.nom_prenom.trim())
+        newErrors.nom_prenom = 'Nom requis';
+      if (!ownerData.telephone.trim()) newErrors.telephone = 'Téléphone requis';
+      if (!ownerData.ville_residence.trim())
+        newErrors.ville_residence = 'Ville requise';
+    }
+    if (step === 2) {
+      if (!ownerData.ville_bien.trim()) newErrors.ville_bien = 'Ville du bien requise';
+      if (!ownerData.quartier_bien.trim()) newErrors.quartier_bien = 'Quartier requis';
+      if (!ownerData.type_bien) newErrors.type_bien = 'Type de bien requis';
+      if (!ownerData.montant_loyer) newErrors.montant_loyer = 'Montant requis';
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const validatePropertyStep = (step: number): boolean => {
+    const newErrors: Record<string, string> = {};
+    if (step === 1) {
+      if (!propertyData.titre.trim()) newErrors.titre = 'Titre requis';
+      if (!propertyData.description.trim())
+        newErrors.description = 'Description requise';
+      if (!propertyData.prix) newErrors.prix = 'Prix requis';
+    }
+    if (step === 2) {
+      if (!propertyData.adresse.trim()) newErrors.adresse = 'Adresse requise';
+      if (!propertyData.ville.trim()) newErrors.ville = 'Ville requise';
+    }
+    if (step === 3) {
+      if (propertyData.images.length === 0) newErrors.images = 'Au moins une image requise';
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  // Soumission propriétaire
+  const submitOwnerData = async (): Promise<number | null> => {
     setLoading(true);
     try {
-      // Construction des paramètres de requête
-      const queryParams = new URLSearchParams();
-      Object.keys(formData).forEach(key => {
-        let value = formData[key as keyof typeof formData];
-        if (value !== null && value !== undefined && value !== '') {
-          if (typeof value === 'boolean') {
-            queryParams.append(key, value ? '1' : '0');
-          } else {
-            queryParams.append(key, value.toString());
-          }
+      const params = new URLSearchParams();
+      Object.entries(ownerData).forEach(([k, v]) => {
+        if (v !== null && v !== undefined && v !== '') {
+          params.append(k, typeof v === 'boolean' ? (v ? '1' : '0') : v);
         }
       });
-
-      const endpoint = formData.id_proprietaire
-        ? `/updateproprietaires?${queryParams.toString()}`
-        : `/proprietaires?${queryParams.toString()}`;
-
-      const response = await postResource(endpoint, null);
-
-      if (response.status === 200 || response.status === 201) {
-        Alert.alert(
-          'Succès', 
-          formData.id_proprietaire ? 'Propriétaire mis à jour avec succès' : 'Propriétaire ajouté avec succès'
-        );
-        setFormSubmitted(true);
+      const res = await postResource(`/proprietaires?${params.toString()}`, null);
+      if (res.status === 200 || res.status === 201) {
+        const id = res.data.data?.id_proprietaire;
+        setOwnerId(id);
+        return id;
       }
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Erreur lors de l\'enregistrement du propriétaire';
-      Alert.alert('Erreur', msg);
+      throw new Error('Réponse inattendue');
+    } catch (error) {
+      Alert.alert('Erreur', "Erreur lors de l'enregistrement du propriétaire");
+      return null;
     } finally {
       setLoading(false);
     }
   };
 
-  const resetForm = () => {
-    setFormData({
-      nom_prenom: '',
-      telephone: '',
-      ville_residence: '',
-      situation_matrimoniale: '',
-      vit_dans_cour: false,
-      ville_bien: property?.ville || '',
-      quartier_bien: property?.quartier || '',
-      type_bien: property?.type || '',
-      nombre_chambres: property?.chambres?.toString() || '',
-      nombre_douches: '',
-      cuisine: false,
-      balcon: false,
-      cour_interne: false,
-      espace_parking: property?.parking || false,
-      garage_accessible: false,
-      type_batiment: '',
-      etat_bien: '',
-      duree_location: '',
-      montant_loyer: property?.prix?.toString() || '',
-      conditions_location: '',
-      colocation_autorisee: false,
-      profession_souhaitee: '',
-      type_locataire: '',
-      nombre_max_occupants: '',
-      criteres_specifiques: '',
-      acces_eau: '',
-      electricite: '',
-      gardien: false,
-      portail: false,
-      cameras: false,
-      accessibilite: '',
-      environnement: '',
-      proximite_ecoles: false,
-      proximite_marche: false,
-      proximite_transport: false,
-      proximite_lieu_culte: false,
-      animaux_autorises: false,
-      autres_exigences: '',
-      id_propriete: selectedProperty?.id_propriete || null,
-      id_proprietaire: null,
-    });
-    setOwnerId(null);
-    setFormSubmitted(false);
+  // Choix agent
+  const handleAgencyCreate = async () => {
+    setPhase('loading');
+    const id = await submitOwnerData();
+    if (id) {
+      setSuccessMessage(
+        'Propriétaire enregistré avec succès ! Un agent vous contactera très prochainement pour créer votre annonce.'
+      );
+      setPhase('success');
+    } else {
+      setPhase('choice');
+    }
   };
 
-  if (formSubmitted) {
+  // Choix soi-même
+  const handleSelfCreate = async () => {
+    setPhase('loading');
+    const id = await submitOwnerData();
+    if (id) {
+      Alert.alert('Succès', 'Propriétaire enregistré ! Créez maintenant votre annonce.');
+      populatePropertyFromOwner();
+      setPropertyStep(1);
+      setPhase('property');
+    } else {
+      setPhase('choice');
+    }
+  };
+
+  // Soumission finale annonce
+  const handleSubmitProperty = async () => {
+    if (!ownerId) {
+      Alert.alert('Erreur', 'Identifiant propriétaire manquant.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const queryParams = new URLSearchParams();
+      queryParams.append('id_proprietaire', ownerId.toString());
+      queryParams.append('idagent', '6');
+
+      Object.keys(propertyData).forEach((key) => {
+        if (key !== 'images' && key !== 'video') {
+          const value = propertyData[key as keyof PropertyDataType];
+          if (typeof value === 'boolean') {
+            queryParams.append(key, value ? '1' : '0');
+          } else if (value && typeof value === 'string' && value.trim() !== '') {
+            queryParams.append(key, value);
+          } else if (value && typeof value === 'number') {
+            queryParams.append(key, value);
+          }
+        }
+      });
+
+      const formData = new FormData();
+      propertyData.images.forEach((img, idx) => {
+        formData.append('images[]', {
+          uri: img.uri,
+          type: img.mimeType || 'image/jpeg',
+          name: img.fileName || `photo_${idx}.jpg`,
+        } as any);
+      });
+      if (propertyData.video) {
+        formData.append('video', {
+          uri: propertyData.video.uri,
+          type: propertyData.video.mimeType || 'video/mp4',
+          name: propertyData.video.fileName || 'video.mp4',
+        } as any);
+      }
+
+      const endpoint = `/proprieteproprietaire?${queryParams.toString()}`;
+      const res = await postFile(endpoint, formData);
+      if (res && (res.status === 200 || res.status === 201)) {
+        setSuccessMessage(
+          'Félicitations ! Votre annonce a été publiée avec succès. Elle sera visible après validation.'
+        );
+        setPhase('success');
+      } else {
+        throw new Error();
+      }
+    } catch (error) {
+      Alert.alert('Erreur', "Erreur lors de la publication de l'annonce");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Navigation propriétaire
+  const ownerNext = () => {
+    if (ownerStep < 3) {
+      if (validateOwnerStep(ownerStep)) setOwnerStep((s) => s + 1);
+      else Alert.alert('Champ requis', 'Veuillez remplir les champs obligatoires');
+    } else if (ownerStep === 3) {
+      setOwnerStep(4);
+    }
+  };
+  const ownerPrev = () => setOwnerStep((s) => Math.max(1, s - 1));
+
+  // Navigation annonce
+  const propertyNext = () => {
+    if (propertyStep < 3) {
+      if (validatePropertyStep(propertyStep)) setPropertyStep((s) => s + 1);
+      else Alert.alert('Champ requis', 'Veuillez remplir les champs obligatoires');
+    } else if (propertyStep === 3) {
+      if (validatePropertyStep(3)) setPropertyStep(4);
+      else Alert.alert('Champ requis', 'Veuillez remplir les champs obligatoires');
+    }
+  };
+  const propertyPrev = () => setPropertyStep((s) => Math.max(1, s - 1));
+
+  // Rendu des étapes propriétaire
+  const renderOwnerStep = () => {
+    switch (ownerStep) {
+      case 1:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.sectionTitle}>Informations du propriétaire</Text>
+            <Text style={styles.sectionSubtitle}>Ces données restent confidentielles</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Type <Text style={styles.required}>*</Text></Text>
+              <View style={styles.rowButtons}>
+                {(['proprietaire', 'agence', 'demarcheur'] as const).map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.optionButton, ownerData.type === t && styles.optionActive]}
+                    onPress={() => handleOwnerChange('type', t)}
+                  >
+                    <Text style={[styles.optionText, ownerData.type === t && styles.optionTextActive]}>
+                      {t === 'proprietaire' ? 'Propriétaire' : t === 'agence' ? 'Agence' : 'Démarcheur'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>
+                {ownerData.type === 'agence'
+                  ? "Nom de l'agence & agent"
+                  : ownerData.type === 'demarcheur'
+                  ? 'Nom du démarcheur'
+                  : 'Nom et prénom'}
+                {ownerData.type === 'proprietaire' && <Text style={styles.required}>*</Text>}
+              </Text>
+              <TextInput
+                {...clavier.champ('nom_prenom')}
+                style={[styles.input, errors.nom_prenom && styles.inputError]}
+                value={ownerData.nom_prenom}
+                onChangeText={(text) => handleOwnerChange('nom_prenom', text)}
+                placeholder="Ex: Mamadou Diallo"
+              />
+              {errors.nom_prenom && <Text style={styles.errorText}>{errors.nom_prenom}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Téléphone <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                {...clavier.champ('telephone')}
+                style={[styles.input, errors.telephone && styles.inputError]}
+                value={ownerData.telephone}
+                onChangeText={(text) => handleOwnerChange('telephone', text)}
+                placeholder="+224 6XX XXX XXX"
+                keyboardType="phone-pad"
+              />
+              {errors.telephone && <Text style={styles.errorText}>{errors.telephone}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Ville de résidence <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                {...clavier.champ('ville_residence')}
+                style={[styles.input, errors.ville_residence && styles.inputError]}
+                value={ownerData.ville_residence}
+                onChangeText={(text) => handleOwnerChange('ville_residence', text)}
+                placeholder="Conakry"
+              />
+              {errors.ville_residence && <Text style={styles.errorText}>{errors.ville_residence}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Situation matrimoniale</Text>
+              <View style={styles.rowButtons}>
+                {['celibataire', 'marie'].map((opt) => (
+                  <TouchableOpacity
+                    key={opt}
+                    style={[styles.optionButton, ownerData.situation_matrimoniale === opt && styles.optionActive]}
+                    onPress={() => handleOwnerChange('situation_matrimoniale', opt)}
+                  >
+                    <Text style={[styles.optionText, ownerData.situation_matrimoniale === opt && styles.optionTextActive]}>
+                      {opt === 'celibataire' ? 'Célibataire' : 'Marié(e)'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.switchRow}>
+              <Text style={styles.switchLabel}>Le propriétaire vit dans la cour</Text>
+              <Switch
+                value={ownerData.vit_dans_cour}
+                onValueChange={(val) => handleOwnerChange('vit_dans_cour', val)}
+                trackColor={{ false: '#e2e8f0', true: '#065483' }}
+                thumbColor="#fff"
+              />
+            </View>
+          </View>
+        );
+
+      case 2:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.sectionTitle}>Informations sur le bien</Text>
+            <Text style={styles.sectionSubtitle}>Décrivez le bien à louer</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Ville du bien <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                {...clavier.champ('ville_bien')}
+                style={[styles.input, errors.ville_bien && styles.inputError]}
+                value={ownerData.ville_bien}
+                onChangeText={(text) => handleOwnerChange('ville_bien', text)}
+                placeholder="Conakry"
+              />
+              {errors.ville_bien && <Text style={styles.errorText}>{errors.ville_bien}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Quartier <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                {...clavier.champ('quartier_bien')}
+                style={[styles.input, errors.quartier_bien && styles.inputError]}
+                value={ownerData.quartier_bien}
+                onChangeText={(text) => handleOwnerChange('quartier_bien', text)}
+                placeholder="Kaloum, Ratoma…"
+              />
+              {errors.quartier_bien && <Text style={styles.errorText}>{errors.quartier_bien}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Type de bien <Text style={styles.required}>*</Text></Text>
+              <View style={styles.rowButtons}>
+                {['chambre', 'appartement', 'studio', 'villa'].map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.optionButton, ownerData.type_bien === t && styles.optionActive]}
+                    onPress={() => handleOwnerChange('type_bien', t)}
+                  >
+                    <Text style={[styles.optionText, ownerData.type_bien === t && styles.optionTextActive]}>
+                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {errors.type_bien && <Text style={styles.errorText}>{errors.type_bien}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Montant du loyer (GNF) <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                {...clavier.champ('montant_loyer')}
+                style={[styles.input, errors.montant_loyer && styles.inputError]}
+                value={ownerData.montant_loyer}
+                onChangeText={(text) => handleOwnerNumber('montant_loyer', text)}
+                placeholder="Ex: 2000000"
+                keyboardType="numeric"
+              />
+              {errors.montant_loyer && <Text style={styles.errorText}>{errors.montant_loyer}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Nb. chambres</Text>
+              <TextInput
+                {...clavier.champ('nombre_chambres')}
+                style={styles.input}
+                value={ownerData.nombre_chambres}
+                onChangeText={(text) => handleOwnerNumber('nombre_chambres', text)}
+                placeholder="0"
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Nb. douches</Text>
+              <TextInput
+                {...clavier.champ('nombre_douches')}
+                style={styles.input}
+                value={ownerData.nombre_douches}
+                onChangeText={(text) => handleOwnerNumber('nombre_douches', text)}
+                placeholder="0"
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Type de bâtiment</Text>
+              <View style={styles.rowButtons}>
+                {['immeuble', 'r_plus', 'rez_de_chaussee'].map((b) => (
+                  <TouchableOpacity
+                    key={b}
+                    style={[styles.optionButton, ownerData.type_batiment === b && styles.optionActive]}
+                    onPress={() => handleOwnerChange('type_batiment', b)}
+                  >
+                    <Text style={[styles.optionText, ownerData.type_batiment === b && styles.optionTextActive]}>
+                      {b === 'immeuble' ? 'Immeuble' : b === 'r_plus' ? 'R+' : 'Rez-de-chaussée'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>État du bien</Text>
+              <View style={styles.rowButtons}>
+                {['neuf', 'bon', 'moyen', 'a_renover'].map((e) => (
+                  <TouchableOpacity
+                    key={e}
+                    style={[styles.optionButton, ownerData.etat_bien === e && styles.optionActive]}
+                    onPress={() => handleOwnerChange('etat_bien', e)}
+                  >
+                    <Text style={[styles.optionText, ownerData.etat_bien === e && styles.optionTextActive]}>
+                      {e === 'a_renover' ? 'À rénover' : e.charAt(0).toUpperCase() + e.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Durée de location</Text>
+              <View style={styles.rowButtons}>
+                {['court_sejour', 'long_sejour'].map((d) => (
+                  <TouchableOpacity
+                    key={d}
+                    style={[styles.optionButton, ownerData.duree_location === d && styles.optionActive]}
+                    onPress={() => handleOwnerChange('duree_location', d)}
+                  >
+                    <Text style={[styles.optionText, ownerData.duree_location === d && styles.optionTextActive]}>
+                      {d === 'court_sejour' ? 'Court séjour' : 'Long séjour'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Conditions de location</Text>
+              <TextInput
+                {...clavier.champ('conditions_location', { multiligne: true })}
+                style={[styles.input, styles.textArea]}
+                value={ownerData.conditions_location}
+                onChangeText={(text) => handleOwnerChange('conditions_location', text)}
+                placeholder="Caution, avance…"
+                numberOfLines={3}
+              />
+            </View>
+
+            <Text style={styles.label}>Équipements disponibles</Text>
+            <View style={styles.checkboxGroup}>
+              {(['cuisine', 'balcon', 'cour_interne', 'espace_parking', 'garage_accessible', 'colocation_autorisee'] as const).map((eq) => (
+                <TouchableOpacity
+                  key={eq}
+                  style={[styles.checkboxRow, ownerData[eq] && styles.checkboxActive]}
+                  onPress={() => handleOwnerChange(eq, !ownerData[eq])}
+                >
+                  <Ionicons
+                    name={ownerData[eq] ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={ownerData[eq] ? '#065483' : '#64748b'}
+                  />
+                  <Text style={styles.checkboxLabel}>
+                    {eq === 'cuisine' ? '🍳 Cuisine' : eq === 'balcon' ? '🌿 Balcon' : eq === 'cour_interne' ? '🏡 Cour interne' : eq === 'espace_parking' ? '🚗 Parking' : eq === 'garage_accessible' ? '🚪 Garage' : '👥 Colocation'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        );
+
+      case 3:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.sectionTitle}>Profil locataire & environnement</Text>
+            <Text style={styles.sectionSubtitle}>Précisez vos préférences (optionnel)</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Profession souhaitée</Text>
+              <TextInput
+                {...clavier.champ('profession_souhaitee')}
+                style={styles.input}
+                value={ownerData.profession_souhaitee}
+                onChangeText={(text) => handleOwnerChange('profession_souhaitee', text)}
+                placeholder="Fonctionnaire, étudiant…"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Type de locataire</Text>
+              <View style={styles.rowButtons}>
+                {(['celibataire', 'couple', 'famille'] as const).map((l) => (
+                  <TouchableOpacity
+                    key={l}
+                    style={[styles.optionButton, ownerData.type_locataire === l && styles.optionActive]}
+                    onPress={() => handleOwnerChange('type_locataire', l)}
+                  >
+                    <Text style={[styles.optionText, ownerData.type_locataire === l && styles.optionTextActive]}>
+                      {l === 'celibataire' ? 'Célibataire' : l === 'couple' ? 'Couple' : 'Famille'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Nombre max d'occupants</Text>
+              <TextInput
+                {...clavier.champ('nombre_max_occupants')}
+                style={styles.input}
+                value={ownerData.nombre_max_occupants}
+                onChangeText={(text) => handleOwnerNumber('nombre_max_occupants', text)}
+                placeholder="Ex: 4"
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Accès eau</Text>
+              <View style={styles.rowButtons}>
+                {['permanent', 'forage'].map((w) => (
+                  <TouchableOpacity
+                    key={w}
+                    style={[styles.optionButton, ownerData.acces_eau === w && styles.optionActive]}
+                    onPress={() => handleOwnerChange('acces_eau', w)}
+                  >
+                    <Text style={[styles.optionText, ownerData.acces_eau === w && styles.optionTextActive]}>
+                      {w === 'permanent' ? 'Permanent' : 'Forage'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Électricité</Text>
+              <View style={styles.rowButtons}>
+                {['edg', 'groupe', 'solaire'].map((e) => (
+                  <TouchableOpacity
+                    key={e}
+                    style={[styles.optionButton, ownerData.electricite === e && styles.optionActive]}
+                    onPress={() => handleOwnerChange('electricite', e)}
+                  >
+                    <Text style={[styles.optionText, ownerData.electricite === e && styles.optionTextActive]}>
+                      {e === 'edg' ? 'EDG' : e === 'groupe' ? 'Groupe électrogène' : 'Solaire'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Accessibilité</Text>
+              <View style={styles.rowButtons}>
+                {['route_goudronnee', 'facile_acces'].map((a) => (
+                  <TouchableOpacity
+                    key={a}
+                    style={[styles.optionButton, ownerData.accessibilite === a && styles.optionActive]}
+                    onPress={() => handleOwnerChange('accessibilite', a)}
+                  >
+                    <Text style={[styles.optionText, ownerData.accessibilite === a && styles.optionTextActive]}>
+                      {a === 'route_goudronnee' ? 'Route goudronnée' : 'Accès facile'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Environnement</Text>
+              <View style={styles.rowButtons}>
+                {['calme', 'anime'].map((env) => (
+                  <TouchableOpacity
+                    key={env}
+                    style={[styles.optionButton, ownerData.environnement === env && styles.optionActive]}
+                    onPress={() => handleOwnerChange('environnement', env)}
+                  >
+                    <Text style={[styles.optionText, ownerData.environnement === env && styles.optionTextActive]}>
+                      {env === 'calme' ? 'Calme' : 'Animé'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <Text style={styles.label}>Sécurité & proximité</Text>
+            <View style={styles.checkboxGroup}>
+              {(['gardien', 'portail', 'cameras', 'proximite_ecoles', 'proximite_marche', 'proximite_transport', 'proximite_lieu_culte', 'animaux_autorises'] as const).map((item) => (
+                <TouchableOpacity
+                  key={item}
+                  style={[styles.checkboxRow, ownerData[item] && styles.checkboxActive]}
+                  onPress={() => handleOwnerChange(item, !ownerData[item])}
+                >
+                  <Ionicons
+                    name={ownerData[item] ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={ownerData[item] ? '#065483' : '#64748b'}
+                  />
+                  <Text style={styles.checkboxLabel}>
+                    {item === 'gardien' ? '🛡 Gardien' : item === 'portail' ? '🚪 Portail' : item === 'cameras' ? '📹 Caméras' : item === 'proximite_ecoles' ? '🏫 Écoles' : item === 'proximite_marche' ? '🛒 Marché' : item === 'proximite_transport' ? '🚌 Transport' : item === 'proximite_lieu_culte' ? '🕌 Lieu de culte' : '🐾 Animaux'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Critères spécifiques</Text>
+              <TextInput
+                {...clavier.champ('criteres_specifiques', { multiligne: true })}
+                style={[styles.input, styles.textArea]}
+                value={ownerData.criteres_specifiques}
+                onChangeText={(text) => handleOwnerChange('criteres_specifiques', text)}
+                numberOfLines={3}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Autres exigences</Text>
+              <TextInput
+                {...clavier.champ('autres_exigences', { multiligne: true })}
+                style={[styles.input, styles.textArea]}
+                value={ownerData.autres_exigences}
+                onChangeText={(text) => handleOwnerChange('autres_exigences', text)}
+                numberOfLines={3}
+              />
+            </View>
+          </View>
+        );
+
+      case 4:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.sectionTitle}>Récapitulatif</Text>
+            <Text style={styles.sectionSubtitle}>Vérifiez vos informations avant de continuer</Text>
+
+            <View style={styles.recapCard}>
+              <Text style={styles.recapTitle}>Propriétaire</Text>
+              <RecapRow label="Type" value={ownerData.type === 'proprietaire' ? 'Propriétaire' : ownerData.type === 'agence' ? 'Agence immobilière' : 'Démarcheur/Mandataire'} />
+              <RecapRow label="Nom / Raison sociale" value={ownerData.nom_prenom || 'Non renseigné'} />
+              <RecapRow label="Téléphone" value={ownerData.telephone} />
+              <RecapRow label="Ville résidence" value={ownerData.ville_residence} />
+              <RecapRow label="Situation matrimoniale" value={ownerData.situation_matrimoniale || '–'} />
+              <RecapRow label="Vit dans la cour" value={ownerData.vit_dans_cour ? 'Oui' : 'Non'} />
+            </View>
+
+            <View style={styles.recapCard}>
+              <Text style={styles.recapTitle}>Bien immobilier</Text>
+              <RecapRow label="Lieu" value={`${ownerData.quartier_bien}, ${ownerData.ville_bien}`} />
+              <RecapRow label="Type" value={ownerData.type_bien} />
+              <RecapRow label="Loyer" value={`${ownerData.montant_loyer} GNF`} />
+              <RecapRow label="Chambres / Douches" value={`${ownerData.nombre_chambres || 0} / ${ownerData.nombre_douches || 0}`} />
+              <RecapRow label="État" value={ownerData.etat_bien || '–'} />
+            </View>
+
+            <View style={styles.buttonRow}>
+              <TouchableOpacity style={styles.outlineButton} onPress={() => setOwnerStep(3)}>
+                <Text style={styles.outlineButtonText}>✏️ Modifier</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.primaryButton} onPress={() => setPhase('choice')}>
+                <Text style={styles.primaryButtonText}>Confirmer et continuer →</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  // Rendu des étapes annonce
+  const renderPropertyStep = () => {
+    switch (propertyStep) {
+      case 1:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.sectionTitle}>Informations générales de l'annonce</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Titre de l'annonce <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                style={[styles.input, errors.titre && styles.inputError]}
+                value={propertyData.titre}
+                onChangeText={(text) => handlePropertyChange('titre', text)}
+                placeholder="Ex: Bel appartement 3 pièces à Kaloum"
+              />
+              {errors.titre && <Text style={styles.errorText}>{errors.titre}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Description <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                style={[styles.input, styles.textArea, errors.description && styles.inputError]}
+                value={propertyData.description}
+                onChangeText={(text) => handlePropertyChange('description', text)}
+                placeholder="Décrivez le bien en détail…"
+                multiline
+                numberOfLines={4}
+              />
+              {errors.description && <Text style={styles.errorText}>{errors.description}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Type de bien</Text>
+              <View style={styles.rowButtons}>
+                {['appartement', 'maison', 'studio', 'villa', 'terrain', 'commerce'].map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.optionButton, propertyData.type === t && styles.optionActive]}
+                    onPress={() => handlePropertyChange('type', t)}
+                  >
+                    <Text style={[styles.optionText, propertyData.type === t && styles.optionTextActive]}>
+                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Opération</Text>
+              <View style={styles.rowButtons}>
+                {['location', 'vente'].map((op) => (
+                  <TouchableOpacity
+                    key={op}
+                    style={[styles.optionButton, propertyData.operation === op && styles.optionActive]}
+                    onPress={() => handlePropertyChange('operation', op)}
+                  >
+                    <Text style={[styles.optionText, propertyData.operation === op && styles.optionTextActive]}>
+                      {op === 'location' ? 'Location' : 'Vente'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Prix <Text style={styles.required}>*</Text></Text>
+              <View style={styles.rowWithSelect}>
+                <TextInput
+                  style={[styles.input, styles.flex1, errors.prix && styles.inputError]}
+                  value={propertyData.prix}
+                  onChangeText={(text) => handlePropertyChange('prix', text)}
+                  placeholder="0"
+                  keyboardType="numeric"
+                />
+                <View style={styles.currencyGroup}>
+                  {(['GNF', 'USD', 'EUR'] as const).map((dev) => (
+                    <TouchableOpacity
+                      key={dev}
+                      style={[styles.currencyButton, propertyData.devise === dev && styles.currencyActive]}
+                      onPress={() => handlePropertyChange('devise', dev)}
+                    >
+                      <Text style={[styles.currencyText, propertyData.devise === dev && styles.currencyTextActive]}>
+                        {dev}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+              {errors.prix && <Text style={styles.errorText}>{errors.prix}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Surface (m²)</Text>
+              <TextInput
+                style={styles.input}
+                value={propertyData.surface}
+                onChangeText={(text) => handlePropertyChange('surface', text)}
+                placeholder="0"
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Chambres</Text>
+              <TextInput
+                style={styles.input}
+                value={propertyData.chambres}
+                onChangeText={(text) => handlePropertyChange('chambres', text)}
+                placeholder="0"
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Salles de bain</Text>
+              <TextInput
+                style={styles.input}
+                value={propertyData.salles_de_bain}
+                onChangeText={(text) => handlePropertyChange('salles_de_bain', text)}
+                placeholder="0"
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+        );
+
+      case 2:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.sectionTitle}>Localisation & état du bien</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Adresse <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                style={[styles.input, errors.adresse && styles.inputError]}
+                value={propertyData.adresse}
+                onChangeText={(text) => handlePropertyChange('adresse', text)}
+                placeholder="Rue, numéro…"
+              />
+              {errors.adresse && <Text style={styles.errorText}>{errors.adresse}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Ville <Text style={styles.required}>*</Text></Text>
+              <TextInput
+                style={[styles.input, errors.ville && styles.inputError]}
+                value={propertyData.ville}
+                onChangeText={(text) => handlePropertyChange('ville', text)}
+                placeholder="Conakry"
+              />
+              {errors.ville && <Text style={styles.errorText}>{errors.ville}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Quartier</Text>
+              <TextInput
+                style={styles.input}
+                value={propertyData.quartier}
+                onChangeText={(text) => handlePropertyChange('quartier', text)}
+                placeholder="Ratoma…"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>État</Text>
+              <View style={styles.rowButtons}>
+                {['neuf', 'excellent', 'bon', 'renovation'].map((et) => (
+                  <TouchableOpacity
+                    key={et}
+                    style={[styles.optionButton, propertyData.etat === et && styles.optionActive]}
+                    onPress={() => handlePropertyChange('etat', et)}
+                  >
+                    <Text style={[styles.optionText, propertyData.etat === et && styles.optionTextActive]}>
+                      {et === 'renovation' ? 'À rénover' : et.charAt(0).toUpperCase() + et.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Année de construction</Text>
+              <TextInput
+                style={styles.input}
+                value={propertyData.annee_construction}
+                onChangeText={(text) => handlePropertyChange('annee_construction', text)}
+                placeholder="2020"
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Pays</Text>
+              <TextInput
+                style={styles.input}
+                value={propertyData.pays}
+                onChangeText={(text) => handlePropertyChange('pays', text)}
+              />
+            </View>
+          </View>
+        );
+
+      case 3:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.sectionTitle}>Équipements & médias</Text>
+            <Text style={styles.sectionSubtitle}>Ajoutez au moins une photo</Text>
+
+            <Text style={styles.label}>Équipements</Text>
+            <View style={styles.checkboxGroup}>
+              {(['meuble', 'climatisation', 'parking', 'jardin', 'terrasse', 'piscine'] as const).map((eq) => (
+                <TouchableOpacity
+                  key={eq}
+                  style={[styles.checkboxRow, propertyData[eq] && styles.checkboxActive]}
+                  onPress={() => handlePropertyChange(eq, !propertyData[eq])}
+                >
+                  <Ionicons
+                    name={propertyData[eq] ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={propertyData[eq] ? '#065483' : '#64748b'}
+                  />
+                  <Text style={styles.checkboxLabel}>
+                    {eq === 'meuble' ? '🛋 Meublé' : eq === 'climatisation' ? '❄️ Clim' : eq === 'parking' ? '🚗 Parking' : eq === 'jardin' ? '🌳 Jardin' : eq === 'terrasse' ? '☀️ Terrasse' : '🏊 Piscine'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Photos du bien <Text style={styles.required}>*</Text></Text>
+              <TouchableOpacity style={styles.uploadButton} onPress={pickImages}>
+                <Ionicons name="camera-outline" size={28} color="#065483" />
+                <Text style={styles.uploadButtonText}>Ajouter des photos</Text>
+              </TouchableOpacity>
+              {errors.images && <Text style={styles.errorText}>{errors.images}</Text>}
+              {propertyData.images.length > 0 && (
+                <ScrollView
+        {...clavier.propsScrollView} horizontal showsHorizontalScrollIndicator={false} style={styles.imagePreviewContainer}>
+                  {propertyData.images.map((img, idx) => (
+                    <View key={idx} style={styles.imagePreview}>
+                      <TouchableOpacity style={styles.removeImageBtn} onPress={() => removeImage(idx)}>
+                        <Ionicons name="close-circle" size={24} color="#C0392B" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Vidéo (optionnel)</Text>
+              <TouchableOpacity style={styles.uploadButton} onPress={pickVideo}>
+                <Ionicons name="videocam-outline" size={28} color="#065483" />
+                <Text style={styles.uploadButtonText}>Ajouter une vidéo</Text>
+              </TouchableOpacity>
+              {propertyData.video && (
+                <View style={styles.videoPreview}>
+                  <Text style={styles.videoName}>{propertyData.video.fileName || 'video.mp4'}</Text>
+                  <TouchableOpacity onPress={removeVideo}>
+                    <Ionicons name="trash-outline" size={24} color="#C0392B" />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </View>
+        );
+
+      case 4:
+        return (
+          <View style={styles.stepContainer}>
+            <Text style={styles.sectionTitle}>Récapitulatif de l'annonce</Text>
+            <Text style={styles.sectionSubtitle}>Vérifiez avant de publier</Text>
+
+            <View style={styles.recapCard}>
+              <RecapRow label="Titre" value={propertyData.titre} />
+              <RecapRow label="Type / Opération" value={`${propertyData.type} – ${propertyData.operation}`} />
+              <RecapRow label="Prix" value={`${propertyData.prix} ${propertyData.devise}`} />
+              <RecapRow label="Surface" value={propertyData.surface ? `${propertyData.surface} m²` : '–'} />
+              <RecapRow label="Chambres / SDB" value={`${propertyData.chambres || 0} / ${propertyData.salles_de_bain || 0}`} />
+              <RecapRow label="Adresse" value={`${propertyData.adresse}, ${propertyData.quartier} ${propertyData.ville}`} />
+              <RecapRow label="État" value={propertyData.etat} />
+              <RecapRow label="Images" value={`${propertyData.images.length} photo(s)`} />
+              <RecapRow label="Vidéo" value={propertyData.video ? 'Oui' : 'Non'} />
+              <RecapRow
+                label="Équipements"
+                value={['meuble', 'climatisation', 'parking', 'jardin', 'terrasse', 'piscine']
+                  .filter((k) => propertyData[k as keyof PropertyDataType] === true)
+                  .join(', ') || 'Aucun'}
+              />
+            </View>
+
+            <View style={styles.buttonRow}>
+              <TouchableOpacity style={styles.outlineButton} onPress={() => setPropertyStep(3)}>
+                <Text style={styles.outlineButtonText}>✏️ Modifier</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.successButton} onPress={handleSubmitProperty} disabled={loading}>
+                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.successButtonText}>🚀 Publier l'annonce</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  // Indicateur d'étapes
+  const StepIndicator = ({ steps, current }: { steps: { label: string }[]; current: number }) => (
+    <View style={styles.stepIndicatorContainer}>
+      {steps.map((step, idx) => {
+        const stepNum = idx + 1;
+        const isCompleted = current > stepNum;
+        const isActive = current === stepNum;
+        return (
+          <View key={idx} style={styles.stepWrapper}>
+            <View style={[styles.stepCircle, isCompleted && styles.stepCircleCompleted, isActive && styles.stepCircleActive]}>
+              {isCompleted ? <Ionicons name="checkmark" size={16} color="#fff" /> : <Text style={[styles.stepNumber, isActive && styles.stepNumberActive]}>{stepNum}</Text>}
+            </View>
+            <Text style={[styles.stepLabel, isActive && styles.stepLabelActive]}>{step.label}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+
+  // Affichage principal selon phase
+  if (phase === 'loading') {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#065483" />
+        <Text style={styles.loadingText}>Traitement en cours…</Text>
+      </View>
+    );
+  }
+
+  if (phase === 'success') {
     return (
       <View style={styles.successContainer}>
-        <Ionicons name="checkmark-circle" size={80} color="#28a745" />
-        <Text style={styles.successTitle}>
-          {ownerId ? "Propriétaire mis à jour !" : "Propriétaire ajouté avec succès !"}
-        </Text>
-        <Text style={styles.successText}>
-          Les informations ont été correctement enregistrées.
-        </Text>
-        <TouchableOpacity style={styles.resetButton} onPress={resetForm}>
-          <Text style={styles.resetButtonText}>Ajouter un autre propriétaire</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Text style={styles.backButtonText}>Retour à l'accueil</Text>
+        <Ionicons name="checkmark-circle" size={100} color="#10b981" />
+        <Text style={styles.successTitle}>Succès !</Text>
+        <Text style={styles.successMessage}>{successMessage}</Text>
+        <TouchableOpacity style={styles.homeButton} onPress={() => router.back()}>
+          <Text style={styles.homeButtonText}>Retour à l'accueil</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
-  return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backArrow}>
-          <Ionicons name="arrow-back" size={24} color="#065483" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>
-          {ownerId ? "Modifier le propriétaire" : "Nouveau propriétaire"}
-        </Text>
-      </View>
-
-      <View style={styles.formCard}>
-        <View style={styles.iconCircle}>
-          <Ionicons name="person-add" size={40} color="#fff" />
+  if (phase === 'choice') {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color="#1e293b" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Publier une annonce</Text>
+          <View style={{ width: 40 }} />
         </View>
-        <Text style={styles.formTitle}>
-          {ownerId ? "Modifier le propriétaire" : "Nouveau propriétaire"}
-        </Text>
-        <Text style={styles.formSubtitle}>
-          Tous les champs marqués d'un * sont obligatoires
-        </Text>
-
-        {/* Recherche de propriété */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            <Ionicons name="business" size={16} /> Propriété liée *
-          </Text>
-          <TouchableOpacity
-            style={styles.propertySearchInput}
-            onPress={() => {
-              fetchProperties();
-              setShowPropertyDropdown(true);
-            }}
-          >
-            <Text style={selectedProperty ? styles.selectedPropertyText : styles.placeholderText}>
-              {selectedProperty ? `${selectedProperty.titre} - ${selectedProperty.adresse}, ${selectedProperty.ville}` : "Sélectionner une propriété"}
-            </Text>
-            <Ionicons name="search" size={20} color="#065483" />
+        <View style={styles.choiceContainer}>
+          <Text style={styles.choiceTitle}>Que souhaitez-vous faire ?</Text>
+          <Text style={styles.choiceSubtitle}>Choisissez comment créer l'annonce</Text>
+          <TouchableOpacity style={styles.choiceButtonPrimary} onPress={handleSelfCreate}>
+            <Text style={styles.choiceButtonPrimaryText}>✍️ Créer l'annonce moi-même</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.choiceButtonOutline} onPress={handleAgencyCreate}>
+            <Text style={styles.choiceButtonOutlineText}>📞 Laisser un agent créer l'annonce</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setPhase('owner')}>
+            <Text style={styles.choiceBackLink}>← Retour et modifier</Text>
           </TouchableOpacity>
         </View>
-
-        {loadingData && selectedProperty ? (
-          <ActivityIndicator size="large" color="#065483" style={{ marginVertical: 20 }} />
-        ) : (
-          <>
-            {/* Section 1: Informations du propriétaire */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>
-                <Ionicons name="person-circle" size={16} /> Informations du propriétaire
-              </Text>
-
-              <Text style={styles.label}>Nom et prénom *</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.nom_prenom}
-                onChangeText={(text) => handleChange('nom_prenom', text)}
-                placeholder="Jean Dupont"
-              />
-
-              <Text style={styles.label}>Téléphone *</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.telephone}
-                onChangeText={(text) => handleChange('telephone', text)}
-                placeholder="+224 6XX XX XX XX"
-                keyboardType="phone-pad"
-              />
-
-              <Text style={styles.label}>Ville de résidence *</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.ville_residence}
-                onChangeText={(text) => handleChange('ville_residence', text)}
-                placeholder="Conakry"
-              />
-
-              <Text style={styles.label}>Situation matrimoniale</Text>
-              <View style={styles.pickerContainer}>
-                {['celibataire', 'marie'].map((option) => (
-                  <TouchableOpacity
-                    key={option}
-                    style={[
-                      styles.pickerOption,
-                      formData.situation_matrimoniale === option && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('situation_matrimoniale', option)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.situation_matrimoniale === option && styles.pickerOptionTextSelected,
-                    ]}>
-                      {option === 'celibataire' ? 'Célibataire' : 'Marié(e)'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <View style={styles.switchRow}>
-                <Text style={styles.label}>Vit dans la cour</Text>
-                <Switch
-                  value={formData.vit_dans_cour}
-                  onValueChange={(val) => handleChange('vit_dans_cour', val)}
-                  trackColor={{ false: '#ccc', true: '#065483' }}
-                />
-              </View>
-            </View>
-
-            {/* Section 2: Informations sur le bien */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>
-                <Ionicons name="home" size={16} /> Informations sur le bien
-              </Text>
-
-              <Text style={styles.label}>Ville du bien *</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.ville_bien}
-                onChangeText={(text) => handleChange('ville_bien', text)}
-                placeholder="Conakry"
-              />
-
-              <Text style={styles.label}>Quartier du bien *</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.quartier_bien}
-                onChangeText={(text) => handleChange('quartier_bien', text)}
-                placeholder="Kaloum"
-              />
-
-              <Text style={styles.label}>Type de bien *</Text>
-              <View style={styles.pickerContainer}>
-                {['chambre', 'appartement', 'studio', 'villa', 'autre'].map((type) => (
-                  <TouchableOpacity
-                    key={type}
-                    style={[
-                      styles.pickerOption,
-                      formData.type_bien === type && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('type_bien', type)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.type_bien === type && styles.pickerOptionTextSelected,
-                    ]}>
-                      {type === 'chambre' ? 'Chambre' : 
-                       type === 'appartement' ? 'Appartement' : 
-                       type === 'studio' ? 'Studio' : 
-                       type === 'villa' ? 'Villa' : 'Autre'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.label}>Nombre de chambres</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.nombre_chambres}
-                onChangeText={(text) => handleNumberChange('nombre_chambres', text)}
-                placeholder="3"
-                keyboardType="numeric"
-              />
-
-              <Text style={styles.label}>Nombre de douches</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.nombre_douches}
-                onChangeText={(text) => handleNumberChange('nombre_douches', text)}
-                placeholder="2"
-                keyboardType="numeric"
-              />
-
-              <View style={styles.checkboxGroup}>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.cuisine}
-                    onValueChange={(val) => handleChange('cuisine', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Cuisine</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.balcon}
-                    onValueChange={(val) => handleChange('balcon', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Balcon</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.cour_interne}
-                    onValueChange={(val) => handleChange('cour_interne', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Cour interne</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.espace_parking}
-                    onValueChange={(val) => handleChange('espace_parking', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Espace parking</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.garage_accessible}
-                    onValueChange={(val) => handleChange('garage_accessible', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Garage accessible</Text>
-                </View>
-              </View>
-
-              <Text style={styles.label}>Type de bâtiment</Text>
-              <View style={styles.pickerContainer}>
-                {['immeuble', 'r_plus', 'rez_de_chaussee', 'autre'].map((type) => (
-                  <TouchableOpacity
-                    key={type}
-                    style={[
-                      styles.pickerOption,
-                      formData.type_batiment === type && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('type_batiment', type)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.type_batiment === type && styles.pickerOptionTextSelected,
-                    ]}>
-                      {type === 'immeuble' ? 'Immeuble' : 
-                       type === 'r_plus' ? 'R+' : 
-                       type === 'rez_de_chaussee' ? 'Rez-de-chaussée' : 'Autre'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.label}>État du bien</Text>
-              <View style={styles.pickerContainer}>
-                {['neuf', 'bon', 'moyen', 'a_renover'].map((etat) => (
-                  <TouchableOpacity
-                    key={etat}
-                    style={[
-                      styles.pickerOption,
-                      formData.etat_bien === etat && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('etat_bien', etat)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.etat_bien === etat && styles.pickerOptionTextSelected,
-                    ]}>
-                      {etat === 'neuf' ? 'Neuf' : 
-                       etat === 'bon' ? 'Bon' : 
-                       etat === 'moyen' ? 'Moyen' : 'À rénover'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* Section 3: Conditions de location */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>
-                <Ionicons name="document-text" size={16} /> Conditions de location
-              </Text>
-
-              <Text style={styles.label}>Durée de location</Text>
-              <View style={styles.pickerContainer}>
-                {['court_sejour', 'long_sejour'].map((duree) => (
-                  <TouchableOpacity
-                    key={duree}
-                    style={[
-                      styles.pickerOption,
-                      formData.duree_location === duree && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('duree_location', duree)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.duree_location === duree && styles.pickerOptionTextSelected,
-                    ]}>
-                      {duree === 'court_sejour' ? 'Court séjour' : 'Long séjour'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.label}>Montant du loyer *</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.montant_loyer}
-                onChangeText={(text) => handleNumberChange('montant_loyer', text)}
-                placeholder="500000"
-                keyboardType="numeric"
-              />
-
-              <Text style={styles.label}>Conditions de location</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={formData.conditions_location}
-                onChangeText={(text) => handleChange('conditions_location', text)}
-                placeholder="Conditions spécifiques..."
-                multiline
-                numberOfLines={3}
-              />
-
-              <View style={styles.switchRow}>
-                <Text style={styles.label}>Colocation autorisée</Text>
-                <Switch
-                  value={formData.colocation_autorisee}
-                  onValueChange={(val) => handleChange('colocation_autorisee', val)}
-                  trackColor={{ false: '#ccc', true: '#065483' }}
-                />
-              </View>
-            </View>
-
-            {/* Section 4: Profil du locataire recherché */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>
-                <Ionicons name="people" size={16} /> Profil du locataire recherché
-              </Text>
-
-              <Text style={styles.label}>Profession souhaitée</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.profession_souhaitee}
-                onChangeText={(text) => handleChange('profession_souhaitee', text)}
-                placeholder="Employé, Étudiant..."
-              />
-
-              <Text style={styles.label}>Type de locataire</Text>
-              <View style={styles.pickerContainer}>
-                {['celibataire', 'couple', 'famille', 'etudiant'].map((type) => (
-                  <TouchableOpacity
-                    key={type}
-                    style={[
-                      styles.pickerOption,
-                      formData.type_locataire === type && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('type_locataire', type)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.type_locataire === type && styles.pickerOptionTextSelected,
-                    ]}>
-                      {type === 'celibataire' ? 'Célibataire' : 
-                       type === 'couple' ? 'Couple' : 
-                       type === 'famille' ? 'Famille' : 'Étudiant'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.label}>Nombre max d'occupants</Text>
-              <TextInput
-                style={styles.input}
-                value={formData.nombre_max_occupants}
-                onChangeText={(text) => handleNumberChange('nombre_max_occupants', text)}
-                placeholder="4"
-                keyboardType="numeric"
-              />
-
-              <Text style={styles.label}>Critères spécifiques</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={formData.criteres_specifiques}
-                onChangeText={(text) => handleChange('criteres_specifiques', text)}
-                placeholder="Critères particuliers..."
-                multiline
-                numberOfLines={3}
-              />
-            </View>
-
-            {/* Section 5: Détails supplémentaires */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>
-                <Ionicons name="settings" size={16} /> Détails supplémentaires
-              </Text>
-
-              <Text style={styles.label}>Accès eau</Text>
-              <View style={styles.pickerContainer}>
-                {['permanent', 'forage', 'autre'].map((acces) => (
-                  <TouchableOpacity
-                    key={acces}
-                    style={[
-                      styles.pickerOption,
-                      formData.acces_eau === acces && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('acces_eau', acces)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.acces_eau === acces && styles.pickerOptionTextSelected,
-                    ]}>
-                      {acces === 'permanent' ? 'Permanent' : 
-                       acces === 'forage' ? 'Forage' : 'Autre'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.label}>Électricité</Text>
-              <View style={styles.pickerContainer}>
-                {['edg', 'groupe', 'solaire'].map((elec) => (
-                  <TouchableOpacity
-                    key={elec}
-                    style={[
-                      styles.pickerOption,
-                      formData.electricite === elec && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('electricite', elec)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.electricite === elec && styles.pickerOptionTextSelected,
-                    ]}>
-                      {elec === 'edg' ? 'EDG' : 
-                       elec === 'groupe' ? 'Groupe électrogène' : 'Solaire'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <View style={styles.checkboxGroup}>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.gardien}
-                    onValueChange={(val) => handleChange('gardien', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Gardien</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.portail}
-                    onValueChange={(val) => handleChange('portail', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Portail</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.cameras}
-                    onValueChange={(val) => handleChange('cameras', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Caméras</Text>
-                </View>
-              </View>
-
-              <Text style={styles.label}>Accessibilité</Text>
-              <View style={styles.pickerContainer}>
-                {['route_goudronnee', 'facile_acces', 'enclave'].map((acc) => (
-                  <TouchableOpacity
-                    key={acc}
-                    style={[
-                      styles.pickerOption,
-                      formData.accessibilite === acc && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('accessibilite', acc)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.accessibilite === acc && styles.pickerOptionTextSelected,
-                    ]}>
-                      {acc === 'route_goudronnee' ? 'Route goudronnée' : 
-                       acc === 'facile_acces' ? 'Accès facile' : 'Enclavé'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.label}>Environnement</Text>
-              <View style={styles.pickerContainer}>
-                {['calme', 'anime', 'familial', 'commercial'].map((env) => (
-                  <TouchableOpacity
-                    key={env}
-                    style={[
-                      styles.pickerOption,
-                      formData.environnement === env && styles.pickerOptionSelected,
-                    ]}
-                    onPress={() => handleChange('environnement', env)}
-                  >
-                    <Text style={[
-                      styles.pickerOptionText,
-                      formData.environnement === env && styles.pickerOptionTextSelected,
-                    ]}>
-                      {env === 'calme' ? 'Calme' : 
-                       env === 'anime' ? 'Animé' : 
-                       env === 'familial' ? 'Familial' : 'Commercial'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <View style={styles.checkboxGroup}>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.proximite_ecoles}
-                    onValueChange={(val) => handleChange('proximite_ecoles', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Proximité écoles</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.proximite_marche}
-                    onValueChange={(val) => handleChange('proximite_marche', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Proximité marché</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.proximite_transport}
-                    onValueChange={(val) => handleChange('proximite_transport', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Proximité transport</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.proximite_lieu_culte}
-                    onValueChange={(val) => handleChange('proximite_lieu_culte', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Lieu de culte</Text>
-                </View>
-                <View style={styles.checkboxRow}>
-                  <Switch
-                    value={formData.animaux_autorises}
-                    onValueChange={(val) => handleChange('animaux_autorises', val)}
-                    trackColor={{ false: '#ccc', true: '#065483' }}
-                  />
-                  <Text style={styles.checkboxLabel}>Animaux autorisés</Text>
-                </View>
-              </View>
-
-              <Text style={styles.label}>Autres exigences</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={formData.autres_exigences}
-                onChangeText={(text) => handleChange('autres_exigences', text)}
-                placeholder="Autres exigences..."
-                multiline
-                numberOfLines={3}
-              />
-            </View>
-          </>
-        )}
-
-        <TouchableOpacity
-          style={[styles.submitButton, (loading || !selectedProperty) && styles.submitButtonDisabled]}
-          onPress={handleSubmit}
-          disabled={loading || !selectedProperty}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitButtonText}>
-              {ownerId ? "Mettre à jour le propriétaire" : "Enregistrer le propriétaire"}
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        <Text style={styles.securityNote}>
-          <Ionicons name="lock-closed" size={12} /> Je certifie que les informations fournies sont exactes et conformes à la réglementation.
-        </Text>
       </View>
+    );
+  }
 
-      {/* Modal de recherche de propriété */}
-      <Modal
-        visible={showPropertyDropdown}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowPropertyDropdown(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Sélectionner une propriété</Text>
-            <TextInput
-              style={styles.modalSearchInput}
-              placeholder="Rechercher..."
-              value={propertySearchTerm}
-              onChangeText={setPropertySearchTerm}
-              autoFocus
-            />
-            {loadingProperties ? (
-              <ActivityIndicator style={{ marginTop: 20 }} />
-            ) : (
-              <FlatList
-                data={filteredProperties}
-                keyExtractor={(item) => item.id_propriete.toString()}
-                renderItem={({ item }) => (
-                  <TouchableOpacity style={styles.modalItem} onPress={() => handlePropertySelect(item)}>
-                    <Text style={styles.modalItemTitle}>{item.titre}</Text>
-                    <Text style={styles.modalItemSub}>
-                      {item.adresse}, {item.ville} - {formatPrice(item.prix)}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={<Text style={styles.modalEmpty}>Aucune propriété trouvée</Text>}
-              />
-            )}
-            <TouchableOpacity style={styles.modalClose} onPress={() => setShowPropertyDropdown(false)}>
-              <Text style={styles.modalCloseText}>Fermer</Text>
-            </TouchableOpacity>
-          </View>
+  if (phase === 'property') {
+    const propertySteps = [{ label: 'Annonce' }, { label: 'Localisation' }, { label: 'Médias' }, { label: 'Récap' }];
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color="#1e293b" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Publier l'annonce</Text>
+          <View style={{ width: 40 }} />
         </View>
-      </Modal>
-    </ScrollView>
+        <StepIndicator steps={propertySteps} current={propertyStep} />
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+          {renderPropertyStep()}
+        </ScrollView>
+        <View style={styles.navButtons}>
+          <TouchableOpacity style={[styles.navPrev, propertyStep === 1 && styles.navDisabled]} onPress={propertyPrev} disabled={propertyStep === 1}>
+            <Ionicons name="arrow-back" size={20} color={propertyStep === 1 ? '#94a3b8' : '#065483'} />
+            <Text style={[styles.navPrevText, propertyStep === 1 && styles.navDisabledText]}>Précédent</Text>
+          </TouchableOpacity>
+          {propertyStep < 4 && (
+            <TouchableOpacity style={styles.navNext} onPress={propertyNext}>
+              <Text style={styles.navNextText}>{propertyStep === 3 ? 'Voir le récapitulatif →' : 'Suivant →'}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  // Phase propriétaire par défaut
+  const ownerSteps = [{ label: 'Propriétaire' }, { label: 'Le bien' }, { label: 'Profil' }, { label: 'Récap' }];
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color="#1e293b" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Publier une annonce</Text>
+        <View style={{ width: 40 }} />
+      </View>
+      <StepIndicator steps={ownerSteps} current={ownerStep} />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        {renderOwnerStep()}
+      </ScrollView>
+      {ownerStep < 4 && (
+        <View style={styles.navButtons}>
+          <TouchableOpacity style={[styles.navPrev, ownerStep === 1 && styles.navDisabled]} onPress={ownerPrev} disabled={ownerStep === 1}>
+            <Ionicons name="arrow-back" size={20} color={ownerStep === 1 ? '#94a3b8' : '#065483'} />
+            <Text style={[styles.navPrevText, ownerStep === 1 && styles.navDisabledText]}>Précédent</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navNext} onPress={ownerNext}>
+            <Text style={styles.navNextText}>{ownerStep === 3 ? 'Voir le récapitulatif →' : 'Suivant →'}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
   );
 }
 
+// Composant auxiliaire pour les lignes de récapitulatif
+const RecapRow = ({ label, value }: { label: string; value: string }) => (
+  <View style={styles.recapRow}>
+    <Text style={styles.recapLabel}>{label}</Text>
+    <Text style={styles.recapValue}>{value}</Text>
+  </View>
+);
+
+// Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f8fafc',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingTop: 60,
     paddingBottom: 16,
     backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
   },
-  backArrow: {
+  backButton: {
     padding: 8,
-    marginRight: 12,
   },
   headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1e293b',
   },
-  formCard: {
+  stepIndicatorContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
     backgroundColor: '#fff',
-    marginHorizontal: 16,
-    marginVertical: 20,
-    marginBottom: 60,
-    borderRadius: 24,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 3,
   },
-  iconCircle: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: '#065483',
+  stepWrapper: {
+    alignItems: 'center',
+  },
+  stepCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#e2e8f0',
     justifyContent: 'center',
     alignItems: 'center',
-    alignSelf: 'center',
-    marginBottom: 16,
+    marginBottom: 8,
   },
-  formTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#333',
-    textAlign: 'center',
+  stepCircleCompleted: {
+    backgroundColor: '#10b981',
   },
-  formSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 24,
+  stepCircleActive: {
+    backgroundColor: '#065483',
   },
-  section: {
-    marginBottom: 28,
-  },
-  sectionTitle: {
+  stepNumber: {
     fontSize: 16,
     fontWeight: '600',
+    color: '#64748b',
+  },
+  stepNumberActive: {
+    color: '#fff',
+  },
+  stepLabel: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  stepLabelActive: {
     color: '#065483',
-    marginBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    paddingBottom: 8,
+    fontWeight: '500',
+  },
+  scrollContent: {
+    paddingBottom: 100,
+  },
+  stepContainer: {
+    padding: 20,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 4,
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    color: '#64748b',
+    marginBottom: 24,
+  },
+  inputGroup: {
+    marginBottom: 20,
   },
   label: {
     fontSize: 14,
-    fontWeight: '500',
-    color: '#333',
+    fontWeight: '600',
+    color: '#1e293b',
     marginBottom: 6,
-    marginTop: 12,
+  },
+  required: {
+    color: '#C0392B',
   },
   input: {
+    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#e2e8f0',
     borderRadius: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
-    backgroundColor: '#fff',
-    marginBottom: 8,
+    color: '#1e293b',
+  },
+  inputError: {
+    borderColor: '#C0392B',
+  },
+  errorText: {
+    color: '#C0392B',
+    fontSize: 12,
+    marginTop: 4,
   },
   textArea: {
-    height: 80,
+    height: 100,
     textAlignVertical: 'top',
   },
-  pickerContainer: {
+  rowButtons: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginVertical: 8,
     gap: 10,
   },
-  pickerOption: {
+  optionButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 30,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#f1f5f9',
     marginRight: 8,
     marginBottom: 8,
   },
-  pickerOptionSelected: {
+  optionActive: {
     backgroundColor: '#065483',
   },
-  pickerOptionText: {
-    color: '#333',
+  optionText: {
+    color: '#64748b',
   },
-  pickerOptionTextSelected: {
+  optionTextActive: {
     color: '#fff',
     fontWeight: '500',
   },
@@ -1059,163 +1470,307 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 12,
-    marginBottom: 8,
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 16,
+  },
+  switchLabel: {
+    fontSize: 16,
+    color: '#1e293b',
   },
   checkboxGroup: {
-    marginTop: 12,
+    marginBottom: 20,
   },
   checkboxRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    paddingVertical: 8,
+    gap: 12,
+  },
+  checkboxActive: {
+    backgroundColor: '#EBF5FB',
+    borderRadius: 8,
+    paddingHorizontal: 8,
   },
   checkboxLabel: {
-    marginLeft: 12,
     fontSize: 14,
-    color: '#333',
+    color: '#1e293b',
   },
-  submitButton: {
-    backgroundColor: '#065483',
-    paddingVertical: 16,
-    borderRadius: 30,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  submitButtonDisabled: {
-    opacity: 0.7,
-  },
-  submitButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  securityNote: {
-    textAlign: 'center',
-    color: '#999',
-    fontSize: 12,
-    marginTop: 16,
-  },
-  propertySearchInput: {
+  rowWithSelect: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
+    gap: 12,
+  },
+  flex1: {
+    flex: 1,
+  },
+  currencyGroup: {
+    flexDirection: 'row',
+    backgroundColor: '#f1f5f9',
     borderRadius: 12,
+    overflow: 'hidden',
+  },
+  currencyButton: {
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: '#fff',
   },
-  placeholderText: {
-    color: '#999',
+  currencyActive: {
+    backgroundColor: '#065483',
   },
-  selectedPropertyText: {
-    color: '#333',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: '90%',
-    maxHeight: '80%',
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 20,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  modalSearchInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 12,
-  },
-  modalItem: {
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  modalItemTitle: {
+  currencyText: {
+    color: '#64748b',
     fontWeight: '500',
   },
-  modalItemSub: {
-    fontSize: 12,
-    color: '#666',
-  },
-  modalEmpty: {
-    textAlign: 'center',
-    marginTop: 20,
-    color: '#999',
-  },
-  modalClose: {
-    marginTop: 16,
-    alignItems: 'center',
-    paddingVertical: 12,
-    backgroundColor: '#065483',
-    borderRadius: 30,
-  },
-  modalCloseText: {
+  currencyTextActive: {
     color: '#fff',
-    fontWeight: 'bold',
+  },
+  uploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    borderWidth: 2,
+    borderColor: '#065483',
+    borderStyle: 'dashed',
+    borderRadius: 16,
+    paddingVertical: 24,
+    backgroundColor: '#EBF5FB',
+  },
+  uploadButtonText: {
+    color: '#065483',
+    fontWeight: '600',
+  },
+  imagePreviewContainer: {
+    flexDirection: 'row',
+    marginTop: 12,
+  },
+  imagePreview: {
+    position: 'relative',
+    marginRight: 12,
+  },
+  previewImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#065483',
+  },
+  removeImageBtn: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+  },
+  videoPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 12,
+  },
+  videoName: {
+    fontSize: 14,
+    color: '#1e293b',
+  },
+  recapCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  recapTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#065483',
+    marginBottom: 12,
+  },
+  recapRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  recapLabel: {
+    color: '#64748b',
+    fontSize: 14,
+  },
+  recapValue: {
+    color: '#1e293b',
+    fontWeight: '500',
+    fontSize: 14,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    marginTop: 8,
+  },
+  primaryButton: {
+    backgroundColor: '#065483',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  primaryButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  outlineButton: {
+    borderWidth: 1.5,
+    borderColor: '#065483',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  outlineButtonText: {
+    color: '#065483',
+    fontWeight: '700',
+  },
+  successButton: {
+    backgroundColor: '#1E8449',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  successButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  navButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  navPrev: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
+  },
+  navPrevText: {
+    color: '#065483',
+    fontWeight: '500',
+  },
+  navNext: {
+    backgroundColor: '#065483',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+  },
+  navNextText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  navDisabled: {
+    opacity: 0.5,
+  },
+  navDisabledText: {
+    color: '#94a3b8',
+  },
+  choiceContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  choiceTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 8,
+  },
+  choiceSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 32,
+  },
+  choiceButtonPrimary: {
+    backgroundColor: '#065483',
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  choiceButtonPrimaryText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  choiceButtonOutline: {
+    borderWidth: 1.5,
+    borderColor: '#065483',
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  choiceButtonOutlineText: {
+    color: '#065483',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  choiceBackLink: {
+    color: '#64748b',
+    textDecorationLine: 'underline',
+    marginTop: 12,
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#1e293b',
   },
   successContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    backgroundColor: '#fff',
+    backgroundColor: '#f8fafc',
   },
   successTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#28a745',
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#10b981',
     marginTop: 16,
-    textAlign: 'center',
+    marginBottom: 8,
   },
-  successText: {
+  successMessage: {
     fontSize: 16,
-    color: '#333',
+    color: '#1e293b',
     textAlign: 'center',
-    marginTop: 12,
+    marginBottom: 32,
   },
-  successSubtext: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  resetButton: {
+  homeButton: {
     backgroundColor: '#065483',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 30,
-    marginTop: 24,
   },
-  resetButtonText: {
+  homeButtonText: {
     color: '#fff',
-    fontWeight: 'bold',
-  },
-  backButton: {
-    marginTop: 12,
-  },
-  backButtonText: {
-    color: '#065483',
-    textDecorationLine: 'underline',
+    fontWeight: '600',
   },
 });
-
-function formatPrice(price?: number, devise = 'GNF') {
-  if (!price) return 'N/A';
-  if (devise === 'GNF') return `${price.toLocaleString('fr-FR')} GNF`;
-  if (devise === 'USD') return `$${price.toLocaleString('en-US')}`;
-  if (devise === 'EUR') return `${price.toLocaleString('fr-FR')} €`;
-  return `${price.toLocaleString('fr-FR')} ${devise}`;
-}
